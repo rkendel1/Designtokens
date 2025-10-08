@@ -1,20 +1,78 @@
-const { chromium } = require('playwright');
+const { chromium, firefox, webkit } = require('playwright');
 const cheerio = require('cheerio');
 const robotsParser = require('robots-parser');
 const axios = require('axios');
 const config = require('./config');
 
+// User agent pool for rotation
+const USER_AGENTS = [
+  // Chrome on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // Chrome on macOS
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  // Firefox on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+  // Firefox on macOS
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0',
+  // Safari on macOS
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+  // Edge on Windows
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+  // Chrome on Android
+  'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  // Safari on iOS
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+];
+
 class Crawler {
   constructor() {
     this.browser = null;
+    this.browserType = null;
+    this.userAgentIndex = 0;
+  }
+
+  // Get random user agent
+  getRandomUserAgent() {
+    if (config.crawler.rotateUserAgents) {
+      const agent = USER_AGENTS[this.userAgentIndex % USER_AGENTS.length];
+      this.userAgentIndex++;
+      return agent;
+    }
+    return config.crawler.userAgent;
+  }
+
+  // Get browser type to use
+  getBrowserType() {
+    const browserType = config.crawler.browser;
+    
+    if (browserType === 'random' || config.crawler.rotateBrowsers) {
+      const browsers = ['chromium', 'firefox', 'webkit'];
+      return browsers[Math.floor(Math.random() * browsers.length)];
+    }
+    
+    return browserType;
+  }
+
+  // Launch appropriate browser
+  async launchBrowser(type) {
+    const browserMap = {
+      chromium: chromium,
+      firefox: firefox,
+      webkit: webkit
+    };
+
+    const browserEngine = browserMap[type] || chromium;
+    
+    return await browserEngine.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
   }
 
   async init() {
     if (!this.browser) {
-      this.browser = await chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
+      this.browserType = this.getBrowserType();
+      this.browser = await this.launchBrowser(this.browserType);
     }
   }
 
@@ -22,7 +80,77 @@ class Crawler {
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
+      this.browserType = null;
     }
+  }
+
+  // Sleep utility
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Retry logic wrapper
+  async withRetry(fn, attempts = config.crawler.retryAttempts) {
+    let lastError;
+    
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        console.log(`Attempt ${i + 1} failed: ${error.message}`);
+        
+        if (i < attempts - 1) {
+          await this.sleep(config.crawler.retryDelay * (i + 1)); // Exponential backoff
+        }
+      }
+    }
+    
+    throw lastError;
+  }
+
+  // Handle lazy-loaded content by scrolling
+  async handleLazyLoad(page) {
+    if (!config.crawler.handleLazyLoad) {
+      return;
+    }
+
+    const scrollSteps = config.crawler.scrollSteps;
+    const scrollDelay = config.crawler.scrollDelay;
+
+    for (let i = 0; i < scrollSteps; i++) {
+      await page.evaluate((step, total) => {
+        const scrollHeight = document.body.scrollHeight;
+        const stepHeight = scrollHeight / total;
+        window.scrollTo(0, stepHeight * (step + 1));
+      }, i, scrollSteps);
+      
+      await this.sleep(scrollDelay);
+    }
+
+    // Scroll back to top
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await this.sleep(scrollDelay);
+  }
+
+  // Detect CAPTCHA on page
+  async detectCaptcha(page) {
+    const captchaIndicators = await page.evaluate(() => {
+      const body = document.body.innerHTML.toLowerCase();
+      const indicators = [
+        body.includes('recaptcha'),
+        body.includes('captcha'),
+        body.includes('hcaptcha'),
+        body.includes('cloudflare'),
+        document.querySelector('iframe[src*="recaptcha"]') !== null,
+        document.querySelector('iframe[src*="hcaptcha"]') !== null,
+        document.querySelector('[class*="captcha"]') !== null
+      ];
+      
+      return indicators.some(indicator => indicator);
+    });
+
+    return captchaIndicators;
   }
 
   // Check robots.txt compliance
@@ -243,68 +371,84 @@ class Crawler {
     }
 
     await this.init();
-    const page = await this.browser.newPage();
 
-    try {
-      // Set user agent
-      await page.setUserAgent(config.crawler.userAgent);
+    // Wrap the crawling logic with retry
+    return await this.withRetry(async () => {
+      const page = await this.browser.newPage();
 
-      // Navigate to page
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: config.crawler.requestTimeout
-      });
+      try {
+        // Set user agent (rotated if enabled)
+        await page.setUserAgent(this.getRandomUserAgent());
 
-      // Wait for page to be fully rendered
-      await page.waitForTimeout(2000);
-
-      // Get HTML
-      const html = await page.content();
-
-      // Extract CSS variables
-      const cssVariables = await this.extractCSSVariables(page);
-
-      // Extract computed styles
-      const computedStyles = await this.extractComputedStyles(page);
-
-      // Take screenshot
-      let screenshot = null;
-      if (takeScreenshot) {
-        screenshot = await page.screenshot({
-          fullPage: true,
-          type: 'png'
+        // Navigate to page
+        await page.goto(url, {
+          waitUntil: 'networkidle',
+          timeout: config.crawler.requestTimeout
         });
+
+        // Wait for page to be fully rendered
+        await page.waitForTimeout(2000);
+
+        // Check for CAPTCHA
+        const hasCaptcha = await this.detectCaptcha(page);
+        if (hasCaptcha) {
+          console.warn(`CAPTCHA detected on ${url}`);
+          // Could throw error or handle differently based on requirements
+        }
+
+        // Handle lazy-loaded content
+        await this.handleLazyLoad(page);
+
+        // Get HTML
+        const html = await page.content();
+
+        // Extract CSS variables
+        const cssVariables = await this.extractCSSVariables(page);
+
+        // Extract computed styles
+        const computedStyles = await this.extractComputedStyles(page);
+
+        // Take screenshot
+        let screenshot = null;
+        if (takeScreenshot) {
+          screenshot = await page.screenshot({
+            fullPage: true,
+            type: 'png'
+          });
+        }
+
+        // Get URL info
+        const urlObj = new URL(url);
+        const domain = urlObj.hostname;
+
+        // Use Cheerio for structured data extraction
+        const structuredData = this.extractStructuredData(html);
+
+        // Get text content for analysis
+        const textContent = await page.evaluate(() => {
+          return document.body.innerText;
+        });
+
+        await page.close();
+
+        return {
+          url,
+          domain,
+          html,
+          screenshot,
+          cssVariables,
+          computedStyles,
+          structuredData,
+          textContent,
+          meta: structuredData.meta,
+          browserUsed: this.browserType,
+          captchaDetected: hasCaptcha
+        };
+      } catch (error) {
+        await page.close();
+        throw error;
       }
-
-      // Get URL info
-      const urlObj = new URL(url);
-      const domain = urlObj.hostname;
-
-      // Use Cheerio for structured data extraction
-      const structuredData = this.extractStructuredData(html);
-
-      // Get text content for analysis
-      const textContent = await page.evaluate(() => {
-        return document.body.innerText;
-      });
-
-      await page.close();
-
-      return {
-        url,
-        domain,
-        html,
-        screenshot,
-        cssVariables,
-        computedStyles,
-        structuredData,
-        textContent,
-        meta: structuredData.meta
-      };
-    } catch (error) {
-      await page.close();
-      throw error;
-    }
+    });
   }
 
   // Extract major colors from computed styles

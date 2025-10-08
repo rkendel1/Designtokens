@@ -1,4 +1,5 @@
 const OpenAI = require('openai');
+const axios = require('axios');
 const config = require('./config');
 
 // Initialize OpenAI client only if API key is available
@@ -10,30 +11,118 @@ if (config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here')
 }
 
 class LLMService {
+  // Call Ollama API
+  async callOllama(prompt, systemPrompt = '') {
+    try {
+      const response = await axios.post(`${config.llm.ollamaUrl}/api/generate`, {
+        model: config.llm.ollamaModel,
+        prompt: systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,
+        stream: false
+      });
+      
+      return response.data.response;
+    } catch (error) {
+      console.error('Error calling Ollama:', error.message);
+      throw new Error('Ollama API error: ' + error.message);
+    }
+  }
+
+  // Call OpenAI API
+  async callOpenAI(prompt, systemPrompt, responseFormat = null) {
+    const messages = [
+      {
+        role: 'system',
+        content: systemPrompt
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ];
+
+    const options = {
+      model: 'gpt-4-turbo-preview',
+      messages,
+      temperature: 0.3
+    };
+
+    if (responseFormat) {
+      options.response_format = responseFormat;
+    }
+
+    const response = await openai.chat.completions.create(options);
+    return response.choices[0].message.content;
+  }
+
+  // Generic LLM call - switches based on provider
+  async callLLM(prompt, systemPrompt = '', responseFormat = null) {
+    const provider = config.llm.provider;
+
+    if (provider === 'ollama') {
+      const response = await this.callOllama(prompt, systemPrompt);
+      // Try to parse JSON if needed
+      if (responseFormat?.type === 'json_object') {
+        try {
+          return JSON.parse(response);
+        } catch (e) {
+          // If parsing fails, try to extract JSON from response
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            return JSON.parse(jsonMatch[0]);
+          }
+          throw new Error('Failed to parse JSON response from Ollama');
+        }
+      }
+      return response;
+    } else if (provider === 'openai') {
+      if (!openai) {
+        throw new Error('OpenAI API key not configured');
+      }
+      const response = await this.callOpenAI(prompt, systemPrompt, responseFormat);
+      if (responseFormat?.type === 'json_object') {
+        return JSON.parse(response);
+      }
+      return response;
+    } else {
+      throw new Error(`Unknown LLM provider: ${provider}`);
+    }
+  }
+
   // Generate embeddings for text
   async generateEmbedding(text) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
-    try {
-      const response = await openai.embeddings.create({
-        model: 'text-embedding-ada-002',
-        input: text
-      });
-      return response.data[0].embedding;
-    } catch (error) {
-      console.error('Error generating embedding:', error);
-      throw error;
+    if (config.llm.provider === 'ollama') {
+      // Ollama embeddings
+      try {
+        const response = await axios.post(`${config.llm.ollamaUrl}/api/embeddings`, {
+          model: config.llm.ollamaModel,
+          prompt: text
+        });
+        return response.data.embedding;
+      } catch (error) {
+        console.error('Error generating Ollama embedding:', error);
+        throw error;
+      }
+    } else {
+      // OpenAI embeddings
+      if (!openai) {
+        throw new Error('OpenAI API key not configured');
+      }
+      
+      try {
+        const response = await openai.embeddings.create({
+          model: 'text-embedding-ada-002',
+          input: text
+        });
+        return response.data[0].embedding;
+      } catch (error) {
+        console.error('Error generating embedding:', error);
+        throw error;
+      }
     }
   }
 
   // Summarize brand voice from content
   async summarizeBrandVoice(content) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
     try {
       const prompt = `Analyze the following website content and provide a comprehensive brand voice analysis. Include:
 1. Tone (e.g., professional, friendly, casual, authoritative)
@@ -46,23 +135,9 @@ ${content.substring(0, 4000)}
 
 Provide the analysis in JSON format with keys: tone, personality, guidelines, themes`;
 
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a brand voice and messaging expert. Analyze website content and extract brand voice characteristics.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.3,
-        response_format: { type: 'json_object' }
-      });
+      const systemPrompt = 'You are a brand voice and messaging expert. Analyze website content and extract brand voice characteristics.';
 
-      return JSON.parse(response.choices[0].message.content);
+      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
     } catch (error) {
       console.error('Error summarizing brand voice:', error);
       throw error;
@@ -71,10 +146,6 @@ Provide the analysis in JSON format with keys: tone, personality, guidelines, th
 
   // Normalize and categorize design tokens
   async normalizeDesignTokens(tokens) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
     try {
       const prompt = `Analyze and normalize the following design tokens. Categorize them properly and provide standardized names.
 
@@ -90,23 +161,9 @@ Return normalized tokens in JSON format as an array with structure:
   "description": "string"
 }]`;
 
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a design systems expert. Normalize and categorize design tokens following industry best practices.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.2,
-        response_format: { type: 'json_object' }
-      });
+      const systemPrompt = 'You are a design systems expert. Normalize and categorize design tokens following industry best practices.';
 
-      const result = JSON.parse(response.choices[0].message.content);
+      const result = await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
       return result.tokens || [];
     } catch (error) {
       console.error('Error normalizing design tokens:', error);
@@ -116,10 +173,6 @@ Return normalized tokens in JSON format as an array with structure:
 
   // Extract company metadata
   async extractCompanyMetadata(html, extractedData) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
     try {
       const prompt = `Extract and normalize company information from the following data:
 
@@ -139,23 +192,9 @@ Provide canonical company metadata in JSON format:
   }
 }`;
 
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert at extracting and normalizing company information from web data.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.1,
-        response_format: { type: 'json_object' }
-      });
+      const systemPrompt = 'You are an expert at extracting and normalizing company information from web data.';
 
-      return JSON.parse(response.choices[0].message.content);
+      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
     } catch (error) {
       console.error('Error extracting company metadata:', error);
       throw error;
@@ -164,10 +203,6 @@ Provide canonical company metadata in JSON format:
 
   // Generate brand summary
   async generateBrandSummary(siteData) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
     try {
       const { title, description, content, companyInfo } = siteData;
       
@@ -180,23 +215,10 @@ Content sample: ${content?.substring(0, 1000)}
 
 Provide a 2-3 sentence professional brand summary.`;
 
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a brand strategist creating concise, professional brand summaries.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.4,
-        max_tokens: 200
-      });
+      const systemPrompt = 'You are a brand strategist creating concise, professional brand summaries.';
 
-      return response.choices[0].message.content.trim();
+      const response = await this.callLLM(prompt, systemPrompt);
+      return typeof response === 'string' ? response.trim() : response;
     } catch (error) {
       console.error('Error generating brand summary:', error);
       throw error;
@@ -205,10 +227,6 @@ Provide a 2-3 sentence professional brand summary.`;
 
   // Analyze colors and suggest categorization
   async analyzeColors(colors) {
-    if (!openai) {
-      throw new Error('OpenAI API key not configured');
-    }
-    
     try {
       const prompt = `Analyze the following colors and categorize them as primary, secondary, accent, neutral, or semantic colors:
 
@@ -228,23 +246,9 @@ Return JSON with categorized colors:
   }
 }`;
 
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a design systems expert specializing in color theory and design token organization.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.2,
-        response_format: { type: 'json_object' }
-      });
+      const systemPrompt = 'You are a design systems expert specializing in color theory and design token organization.';
 
-      return JSON.parse(response.choices[0].message.content);
+      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
     } catch (error) {
       console.error('Error analyzing colors:', error);
       throw error;

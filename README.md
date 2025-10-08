@@ -1,22 +1,34 @@
 # Design Tokens - OpenAI-Powered Site Crawler
 
-An intelligent web crawler that extracts design tokens, brand voice, and metadata from websites using OpenAI's GPT-4 and Playwright.
+An intelligent web crawler that extracts design tokens, brand voice, and metadata from websites using AI (OpenAI or local LLMs) and Playwright.
 
 ## Features
 
+### Core Features
 - 🎨 **Design Token Extraction**: Automatically extracts colors, typography, spacing, and other design tokens from websites
-- 🤖 **AI-Powered Analysis**: Uses OpenAI GPT-4 to normalize design tokens and analyze brand voice
+- 🤖 **AI-Powered Analysis**: Uses OpenAI GPT-4 or local LLMs (Ollama) to normalize design tokens and analyze brand voice
 - 🗄️ **PostgreSQL Storage**: Stores all data in PostgreSQL with pgvector extension for embeddings
 - 📊 **Brand Profile Generator**: Creates PDF reports with brand colors, fonts, and voice guidelines
 - 🔍 **Structured Data Extraction**: Extracts company info, products, contact details, and social links
 - 🛡️ **Robots.txt Compliance**: Respects robots.txt protocol
 - ⚡ **Rate Limiting & Caching**: Built-in protection and performance optimization
 
+### Enhanced Features ✨
+- 🔄 **LLM Provider Flexibility**: Switch between OpenAI and local LLMs (Ollama) for privacy and cost control
+- 🎭 **User Agent Rotation**: Dynamic user agent rotation to appear as different browsers and devices
+- 🌐 **Multi-Browser Support**: Chromium, Firefox, and WebKit support for comprehensive crawling
+- 🔁 **Intelligent Retry Logic**: Automatic retry with exponential backoff for failed requests
+- 📜 **Lazy Load Handling**: Captures dynamically loaded content by simulating scroll behavior
+- 🔐 **CAPTCHA Detection**: Automatic detection of CAPTCHA challenges
+
+See [ENHANCEMENTS.md](ENHANCEMENTS.md) for detailed documentation on new features.
+
 ## Prerequisites
 
 - Node.js 16+ 
 - PostgreSQL 12+ with pgvector extension
-- OpenAI API key
+- OpenAI API key (optional - can use local LLM)
+- Ollama (optional - for local LLM)
 
 ## Installation
 
