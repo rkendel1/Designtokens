@@ -1,13 +1,21 @@
 const OpenAI = require('openai');
 const config = require('./config');
 
-const openai = new OpenAI({
-  apiKey: config.openai.apiKey
-});
+// Initialize OpenAI client only if API key is available
+let openai = null;
+if (config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here') {
+  openai = new OpenAI({
+    apiKey: config.openai.apiKey
+  });
+}
 
 class LLMService {
   // Generate embeddings for text
   async generateEmbedding(text) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const response = await openai.embeddings.create({
         model: 'text-embedding-ada-002',
@@ -22,6 +30,10 @@ class LLMService {
 
   // Summarize brand voice from content
   async summarizeBrandVoice(content) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const prompt = `Analyze the following website content and provide a comprehensive brand voice analysis. Include:
 1. Tone (e.g., professional, friendly, casual, authoritative)
@@ -59,6 +71,10 @@ Provide the analysis in JSON format with keys: tone, personality, guidelines, th
 
   // Normalize and categorize design tokens
   async normalizeDesignTokens(tokens) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const prompt = `Analyze and normalize the following design tokens. Categorize them properly and provide standardized names.
 
@@ -100,6 +116,10 @@ Return normalized tokens in JSON format as an array with structure:
 
   // Extract company metadata
   async extractCompanyMetadata(html, extractedData) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const prompt = `Extract and normalize company information from the following data:
 
@@ -144,6 +164,10 @@ Provide canonical company metadata in JSON format:
 
   // Generate brand summary
   async generateBrandSummary(siteData) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const { title, description, content, companyInfo } = siteData;
       
@@ -181,6 +205,10 @@ Provide a 2-3 sentence professional brand summary.`;
 
   // Analyze colors and suggest categorization
   async analyzeColors(colors) {
+    if (!openai) {
+      throw new Error('OpenAI API key not configured');
+    }
+    
     try {
       const prompt = `Analyze the following colors and categorize them as primary, secondary, accent, neutral, or semantic colors:
 

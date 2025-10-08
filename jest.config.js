@@ -12,5 +12,6 @@ module.exports = {
     '**/?(*.)+(spec|test).js'
   ],
   testTimeout: 30000,
-  verbose: true
+  verbose: true,
+  setupFiles: ['<rootDir>/jest.setup.js']
 };

@@ -298,29 +298,31 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// Start server
-const PORT = config.port;
-const server = app.listen(PORT, () => {
-  console.log(`Design Tokens API server running on port ${PORT}`);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully...');
-  server.close(async () => {
-    await crawler.close();
-    await store.close();
-    process.exit(0);
+// Start server only if not in test environment
+if (process.env.NODE_ENV !== 'test' && require.main === module) {
+  const PORT = config.port;
+  const server = app.listen(PORT, () => {
+    console.log(`Design Tokens API server running on port ${PORT}`);
   });
-});
 
-process.on('SIGINT', async () => {
-  console.log('SIGINT received, shutting down gracefully...');
-  server.close(async () => {
-    await crawler.close();
-    await store.close();
-    process.exit(0);
+  // Graceful shutdown
+  process.on('SIGTERM', async () => {
+    console.log('SIGTERM received, shutting down gracefully...');
+    server.close(async () => {
+      await crawler.close();
+      await store.close();
+      process.exit(0);
+    });
   });
-});
+
+  process.on('SIGINT', async () => {
+    console.log('SIGINT received, shutting down gracefully...');
+    server.close(async () => {
+      await crawler.close();
+      await store.close();
+      process.exit(0);
+    });
+  });
+}
 
 module.exports = app;
