@@ -35,10 +35,6 @@ app.post('/api/crawl', async (req, res) => {
   try {
     const { url, depth = 1, skipCache = false } = req.body;
 
-    if (!url) {
-      return res.status(400).json({ error: 'URL is required' });
-    }
-
     // Validate URL
     let parsedUrl;
     try {
@@ -51,84 +47,68 @@ app.post('/api/crawl', async (req, res) => {
     const cacheKey = `crawl:${url}`;
     if (!skipCache) {
       const cached = cache.get(cacheKey);
-      if (cached) {
-        return res.json({ ...cached, fromCache: true });
-      }
+      if (cached) return res.json({ ...cached, fromCache: true });
     }
 
     // Check if site already exists in DB
     let site = await store.getSiteByUrl(url);
-    
-    // Crawl the site
-    console.log(`Crawling ${url}...`);
-    const crawlData = await crawler.crawl(url, { depth, takeScreenshot: true });
 
-    // Extract design tokens from CSS variables and computed styles
-    const designTokens = [];
-    
-    // CSS Variables
-    Object.entries(crawlData.cssVariables).forEach(([key, value]) => {
-      designTokens.push({
-        tokenKey: key,
-        tokenType: 'css-variable',
-        tokenValue: value,
-        source: 'css'
+    // Crawl the site and ensure safe defaults
+    let crawlData = {};
+    try {
+      crawlData = await crawler.crawl(url, { depth, takeScreenshot: true }) || {};
+    } catch (crawlError) {
+      console.error(`Crawler failed for ${url}:`, crawlError);
+      return res.status(500).json({
+        error: 'Failed to crawl site',
+        message: crawlError.message
       });
+    }
+
+    crawlData.structuredData = crawlData.structuredData || {};
+    crawlData.cssVariables = crawlData.cssVariables || {};
+    crawlData.computedStyles = crawlData.computedStyles || {};
+    crawlData.meta = crawlData.meta || {};
+    crawlData.textContent = typeof crawlData.textContent === 'string' ? crawlData.textContent : "";
+    crawlData.structuredData.products = Array.isArray(crawlData.structuredData.products) ? crawlData.structuredData.products : [];
+    crawlData.structuredData.emails = Array.isArray(crawlData.structuredData.emails) ? crawlData.structuredData.emails : [];
+    crawlData.structuredData.phones = Array.isArray(crawlData.structuredData.phones) ? crawlData.structuredData.phones : [];
+    crawlData.structuredData.addresses = Array.isArray(crawlData.structuredData.addresses) ? crawlData.structuredData.addresses : [];
+    crawlData.structuredData.socialLinks = Array.isArray(crawlData.structuredData.socialLinks) ? crawlData.structuredData.socialLinks : [];
+
+    // Extract design tokens
+    const designTokens = [];
+
+    Object.entries(crawlData.cssVariables).forEach(([key, value]) => {
+      designTokens.push({ tokenKey: key, tokenType: 'css-variable', tokenValue: value, source: 'css' });
     });
 
-    // Major colors
     const majorColors = crawler.extractMajorColors(crawlData.computedStyles);
     majorColors.forEach((color, index) => {
-      designTokens.push({
-        tokenKey: `color-${index + 1}`,
-        tokenType: 'color',
-        tokenValue: color,
-        source: 'computed'
-      });
+      designTokens.push({ tokenKey: `color-${index + 1}`, tokenType: 'color', tokenValue: color, source: 'computed' });
     });
 
-    // Major fonts
     const majorFonts = crawler.extractMajorFonts(crawlData.computedStyles);
     majorFonts.forEach((font, index) => {
-      designTokens.push({
-        tokenKey: `font-family-${index + 1}`,
-        tokenType: 'typography',
-        tokenValue: font,
-        source: 'computed'
-      });
+      designTokens.push({ tokenKey: `font-family-${index + 1}`, tokenType: 'typography', tokenValue: font, source: 'computed' });
     });
 
-    // Spacing scale
     const spacingScale = crawler.extractSpacingScale(crawlData.computedStyles);
     spacingScale.forEach((spacing, index) => {
-      designTokens.push({
-        tokenKey: `spacing-${index + 1}`,
-        tokenType: 'spacing',
-        tokenValue: spacing,
-        source: 'computed'
-      });
+      designTokens.push({ tokenKey: `spacing-${index + 1}`, tokenType: 'spacing', tokenValue: spacing, source: 'computed' });
     });
 
-    // Use OpenAI to normalize design tokens
-    console.log('Normalizing design tokens with AI...');
-    const normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50)); // Limit for API
+    // Normalize design tokens via LLM
+    const normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50));
 
-    // Analyze brand voice
-    console.log('Analyzing brand voice...');
-    const brandVoiceAnalysis = await llm.summarizeBrandVoice(crawlData.textContent);
-
-    // Generate brand voice embedding
+    // Analyze brand voice safely
+    const brandVoiceAnalysis = await llm.summarizeBrandVoice(crawlData.textContent || "");
     const brandVoiceText = `${brandVoiceAnalysis.tone} ${brandVoiceAnalysis.personality} ${JSON.stringify(brandVoiceAnalysis.themes)}`;
     const embedding = await llm.generateEmbedding(brandVoiceText);
-
     // Extract company metadata
-    console.log('Extracting company metadata...');
-    const companyMetadata = await llm.extractCompanyMetadata(
-      crawlData.html,
-      crawlData.structuredData
-    );
+    const companyMetadata = await llm.extractCompanyMetadata(crawlData.html, crawlData.structuredData);
 
-    // Store in database
+    // Store site in DB
     if (!site) {
       site = await store.createSite({
         url: crawlData.url,
@@ -169,12 +149,8 @@ app.post('/api/crawl', async (req, res) => {
       tokenType: token.category,
       tokenValue: token.value,
       source: 'normalized',
-      meta: {
-        originalKey: token.originalKey,
-        description: token.description
-      }
+      meta: { originalKey: token.originalKey, description: token.description }
     }));
-    
     const storedTokens = await store.createDesignTokensBulk(tokensToStore);
 
     // Store products
@@ -188,39 +164,28 @@ app.post('/api/crawl', async (req, res) => {
         productUrl: product.url,
         metadata: {}
       }));
-      
       await store.createProductsBulk(productsToStore);
     }
 
     // Store brand voice
-    const brandVoice = await store.createBrandVoice({
+    await store.createBrandVoice({
       siteId: site.id,
       summary: JSON.stringify(brandVoiceAnalysis),
       guidelines: brandVoiceAnalysis.guidelines || {},
-      embedding: `[${embedding.join(',')}]` // PostgreSQL vector format
+      embedding: `[${embedding.join(',')}]`
     });
 
     // Prepare response
     const response = {
-      site: {
-        id: site.id,
-        url: site.url,
-        domain: site.domain,
-        title: site.title,
-        description: site.description
-      },
+      site: { id: site.id, url: site.url, domain: site.domain, title: site.title, description: site.description },
       companyInfo: {
         name: companyInfo.company_name,
         emails: companyInfo.contact_emails,
         phones: companyInfo.contact_phones,
         socialLinks: companyInfo.structured_json?.socialLinks || []
       },
-      designTokens: storedTokens.slice(0, 20), // Return sample
-      brandVoice: {
-        tone: brandVoiceAnalysis.tone,
-        personality: brandVoiceAnalysis.personality,
-        themes: brandVoiceAnalysis.themes
-      },
+      designTokens: storedTokens.slice(0, 20),
+      brandVoice: { tone: brandVoiceAnalysis.tone, personality: brandVoiceAnalysis.personality, themes: brandVoiceAnalysis.themes },
       stats: {
         totalTokens: storedTokens.length,
         totalProducts: crawlData.structuredData.products.length,
@@ -228,16 +193,14 @@ app.post('/api/crawl', async (req, res) => {
       }
     };
 
-    // Cache the result
+    // Cache the response
     cache.set(cacheKey, response);
 
     res.json(response);
+
   } catch (error) {
     console.error('Crawl error:', error);
-    res.status(500).json({ 
-      error: 'Failed to crawl site', 
-      message: error.message 
-    });
+    res.status(500).json({ error: 'Failed to crawl site', message: error.message });
   }
 });
 
@@ -246,11 +209,7 @@ app.get('/api/sites/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const data = await store.getCompleteSiteData(id);
-    
-    if (!data.site) {
-      return res.status(404).json({ error: 'Site not found' });
-    }
-
+    if (!data.site) return res.status(404).json({ error: 'Site not found' });
     res.json(data);
   } catch (error) {
     console.error('Get site error:', error);
@@ -258,7 +217,7 @@ app.get('/api/sites/:id', async (req, res) => {
   }
 });
 
-// GET /sites/:id/tokens - Get design tokens for a site
+// GET /sites/:id/tokens - Get design tokens
 app.get('/api/sites/:id/tokens', async (req, res) => {
   try {
     const { id } = req.params;
@@ -275,14 +234,10 @@ app.get('/api/sites/:id/brand-profile', async (req, res) => {
   try {
     const { id } = req.params;
     const generatePDF = require('./pdf-generator');
-    
     const data = await store.getCompleteSiteData(id);
-    if (!data.site) {
-      return res.status(404).json({ error: 'Site not found' });
-    }
+    if (!data.site) return res.status(404).json({ error: 'Site not found' });
 
     const pdfBuffer = await generatePDF(data);
-    
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="brand-profile-${id}.pdf"`);
     res.send(pdfBuffer);
@@ -298,7 +253,7 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-// Start server only if not in test environment
+// Start server
 if (process.env.NODE_ENV !== 'test' && require.main === module) {
   const PORT = config.port;
   const server = app.listen(PORT, () => {
@@ -306,23 +261,17 @@ if (process.env.NODE_ENV !== 'test' && require.main === module) {
   });
 
   // Graceful shutdown
-  process.on('SIGTERM', async () => {
-    console.log('SIGTERM received, shutting down gracefully...');
+  const shutdown = async () => {
+    console.log('Shutting down gracefully...');
     server.close(async () => {
       await crawler.close();
       await store.close();
       process.exit(0);
     });
-  });
+  };
 
-  process.on('SIGINT', async () => {
-    console.log('SIGINT received, shutting down gracefully...');
-    server.close(async () => {
-      await crawler.close();
-      await store.close();
-      process.exit(0);
-    });
-  });
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 module.exports = app;

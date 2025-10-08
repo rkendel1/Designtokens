@@ -11,6 +11,97 @@ if (config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here')
 }
 
 class LLMService {
+  // The following LLM-powered methods are used to enrich crawl results for modern JS-heavy SaaS sites.
+  // They provide advanced AI-powered extraction and normalization of design tokens and feature detection.
+  /**
+   * Uses LLM to infer and normalize design tokens from HTML and computed styles.
+   * @param {string} html - HTML snippet or content
+   * @param {object} computedStyles - Object mapping selectors or elements to computed style objects
+   * @returns {Promise<Array>} Structured array of normalized design tokens
+   */
+  async inferDesignTokensFromLLM(html, computedStyles) {
+    try {
+      const prompt = `Given the following HTML and computed CSS styles, extract and normalize design tokens.
+Focus on tokens for colors, typography (fonts, font sizes, weights), spacing (padding, margin, gaps), shadows, and border radii.
+Return a structured array, normalizing similar values and using standard design token naming conventions.
+
+HTML snippet:
+${html.substring(0, 3000)}
+
+Computed styles (JSON):
+${JSON.stringify(computedStyles, null, 2)}
+
+Output format (JSON array):
+[
+  {
+    "originalKey": "string (e.g. --main-bg-color or .button background)",
+    "normalizedKey": "string (e.g. color.background.primary)",
+    "category": "color|typography|spacing|shadow|border",
+    "value": "string (the CSS value)",
+    "description": "string (brief explanation of use)"
+  }
+]
+`;
+      const systemPrompt = 'You are a world-class design systems and frontend expert. Extract and normalize design tokens from HTML and computed CSS styles, deduplicating and organizing them using industry best practices.';
+      const result = await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
+      // Accept array directly or as .tokens property
+      if (Array.isArray(result)) {
+        return result;
+      }
+      if (Array.isArray(result.tokens)) {
+        return result.tokens;
+      }
+      return [];
+    } catch (error) {
+      console.error('Error inferring design tokens from LLM:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Uses LLM to extract SaaS features, modules, or pseudo-products from HTML and structured data.
+   * @param {string} html - HTML snippet or content
+   * @param {object} structuredData - Existing extracted structured data (e.g. navigation, headings, etc.)
+   * @returns {Promise<Array>} Array of features with name, description, and optional link
+   */
+  async extractFeaturesFromLLM(html, structuredData) {
+    try {
+      const prompt = `Given the following HTML and structured data, identify SaaS features, modules, or pseudo-products.
+For each feature, provide:
+- name (short, human-readable)
+- description (1-2 sentences)
+- optional link (if available in the HTML)
+
+HTML snippet:
+${html.substring(0, 3000)}
+
+Structured data (JSON):
+${JSON.stringify(structuredData, null, 2)}
+
+Return a JSON array:
+[
+  {
+    "name": "Feature Name",
+    "description": "Short description of the feature or module",
+    "link": "https://example.com/feature" // optional
+  }
+]
+`;
+      const systemPrompt = 'You are a SaaS product expert skilled at analyzing web UIs and structured data to extract a list of features, modules, or pseudo-products with descriptions.';
+      const result = await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
+      // Accept array directly or as .features property
+      if (Array.isArray(result)) {
+        return result;
+      }
+      if (Array.isArray(result.features)) {
+        return result.features;
+      }
+      return [];
+    } catch (error) {
+      console.error('Error extracting features from LLM:', error);
+      throw error;
+    }
+  }
   // Call Ollama API
   async callOllama(prompt, systemPrompt = '') {
     try {

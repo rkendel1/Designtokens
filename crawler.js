@@ -3,6 +3,10 @@ const cheerio = require('cheerio');
 const robotsParser = require('robots-parser');
 const axios = require('axios');
 const config = require('./config');
+const ColorThief = require('colorthief'); // For screenshot-based color extraction
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 // User agent pool for rotation
 const USER_AGENTS = [
@@ -215,9 +219,23 @@ class Crawler {
     });
   }
 
-  // Extract computed styles from elements
+  /**
+   * Enhanced design token extraction for modern JS-heavy SaaS pages:
+   * - Traverses all visible elements in the body, not just top-level children and key selectors.
+   * - Aggregates inline styles, computed styles, and pseudo-element styles where possible.
+   * - Collects all unique colors, fonts, font sizes, spacing, border radius, and shadows.
+   * - Ensures full coverage for highly dynamic, componentized, JS-heavy UIs.
+   */
   async extractComputedStyles(page) {
     return await page.evaluate(() => {
+      // Helper to check if an element is visible
+      function isVisible(el) {
+        if (!el || !(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        return style && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+      }
+
+      // Sets for deduplication
       const styles = {
         colors: new Set(),
         fonts: new Set(),
@@ -227,49 +245,80 @@ class Crawler {
         shadows: new Set()
       };
 
-      const elements = document.querySelectorAll('*');
-      const sampleSize = Math.min(elements.length, 200); // Sample to avoid performance issues
-      
-      for (let i = 0; i < sampleSize; i++) {
-        const el = elements[Math.floor(Math.random() * elements.length)];
+      // Traverse all visible elements in body
+      const allElements = Array.from(document.body.querySelectorAll('*')).filter(isVisible);
+      // Always include body itself
+      allElements.unshift(document.body);
+
+      allElements.forEach(el => {
         const computed = getComputedStyle(el);
-        
         // Colors
         const color = computed.color;
         const bgColor = computed.backgroundColor;
         const borderColor = computed.borderColor;
         if (color && color !== 'rgba(0, 0, 0, 0)') styles.colors.add(color);
-        if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)') styles.colors.add(bgColor);
+        if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') styles.colors.add(bgColor);
         if (borderColor && borderColor !== 'rgba(0, 0, 0, 0)') styles.colors.add(borderColor);
-        
+
         // Typography
-        const fontFamily = computed.fontFamily;
-        const fontSize = computed.fontSize;
-        if (fontFamily) styles.fonts.add(fontFamily);
-        if (fontSize) styles.fontSizes.add(fontSize);
-        
+        if (computed.fontFamily) styles.fonts.add(computed.fontFamily);
+        if (computed.fontSize) styles.fontSizes.add(computed.fontSize);
+
         // Spacing
-        const padding = computed.padding;
-        const margin = computed.margin;
-        if (padding) styles.spacing.add(padding);
-        if (margin) styles.spacing.add(margin);
-        
+        if (computed.padding && computed.padding !== '0px') styles.spacing.add(computed.padding);
+        if (computed.margin && computed.margin !== '0px') styles.spacing.add(computed.margin);
+
         // Border radius
-        const borderRadius = computed.borderRadius;
-        if (borderRadius && borderRadius !== '0px') styles.borderRadius.add(borderRadius);
-        
+        if (computed.borderRadius && computed.borderRadius !== '0px') styles.borderRadius.add(computed.borderRadius);
+
         // Shadows
-        const boxShadow = computed.boxShadow;
-        if (boxShadow && boxShadow !== 'none') styles.shadows.add(boxShadow);
-      }
-      
+        if (computed.boxShadow && computed.boxShadow !== 'none') styles.shadows.add(computed.boxShadow);
+
+        // Inline style values for all relevant properties
+        if (el.style) {
+          if (el.style.color) styles.colors.add(el.style.color);
+          if (el.style.backgroundColor) styles.colors.add(el.style.backgroundColor);
+          if (el.style.borderColor) styles.colors.add(el.style.borderColor);
+          if (el.style.fontFamily) styles.fonts.add(el.style.fontFamily);
+          if (el.style.fontSize) styles.fontSizes.add(el.style.fontSize);
+          if (el.style.padding) styles.spacing.add(el.style.padding);
+          if (el.style.margin) styles.spacing.add(el.style.margin);
+          if (el.style.borderRadius) styles.borderRadius.add(el.style.borderRadius);
+          if (el.style.boxShadow) styles.shadows.add(el.style.boxShadow);
+        }
+
+        // Try to get pseudo-element styles (:before and :after)
+        ['::before', '::after'].forEach(pseudo => {
+          try {
+            const pseudoComputed = getComputedStyle(el, pseudo);
+            if (pseudoComputed) {
+              const pColor = pseudoComputed.color;
+              const pBg = pseudoComputed.backgroundColor;
+              const pBorderColor = pseudoComputed.borderColor;
+              if (pColor && pColor !== 'rgba(0, 0, 0, 0)') styles.colors.add(pColor);
+              if (pBg && pBg !== 'rgba(0, 0, 0, 0)' && pBg !== 'transparent') styles.colors.add(pBg);
+              if (pBorderColor && pBorderColor !== 'rgba(0, 0, 0, 0)') styles.colors.add(pBorderColor);
+              if (pseudoComputed.fontFamily) styles.fonts.add(pseudoComputed.fontFamily);
+              if (pseudoComputed.fontSize) styles.fontSizes.add(pseudoComputed.fontSize);
+              if (pseudoComputed.padding && pseudoComputed.padding !== '0px') styles.spacing.add(pseudoComputed.padding);
+              if (pseudoComputed.margin && pseudoComputed.margin !== '0px') styles.spacing.add(pseudoComputed.margin);
+              if (pseudoComputed.borderRadius && pseudoComputed.borderRadius !== '0px') styles.borderRadius.add(pseudoComputed.borderRadius);
+              if (pseudoComputed.boxShadow && pseudoComputed.boxShadow !== 'none') styles.shadows.add(pseudoComputed.boxShadow);
+            }
+          } catch (e) {
+            // Some browsers throw on certain pseudo-elements, skip
+          }
+        });
+      });
+
+      // Return arrays for serialization
       return {
-        colors: Array.from(styles.colors),
-        fonts: Array.from(styles.fonts),
-        fontSizes: Array.from(styles.fontSizes),
-        spacing: Array.from(styles.spacing),
-        borderRadius: Array.from(styles.borderRadius),
-        shadows: Array.from(styles.shadows)
+        colors: Array.from(styles.colors).filter(Boolean),
+        fonts: Array.from(styles.fonts).filter(Boolean),
+        fontSizes: Array.from(styles.fontSizes).filter(Boolean),
+        spacing: Array.from(styles.spacing).filter(Boolean),
+        borderRadius: Array.from(styles.borderRadius).filter(Boolean),
+        shadows: Array.from(styles.shadows).filter(Boolean)
       };
     });
   }
@@ -282,8 +331,11 @@ class Crawler {
       phones: new Set(),
       socialLinks: [],
       products: [],
-      addresses: []
+      addresses: new Set()
     };
+
+    // NOTE: A deep crawl is needed to capture JS-rendered content and emails/phones injected by JavaScript.
+    // This function only extracts what is present in the static HTML.
 
     // Email regex
     const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
@@ -342,6 +394,48 @@ class Crawler {
       }
     });
 
+    // Extract products from <script type="application/ld+json"> blocks
+    $('script[type="application/ld+json"]').each((i, el) => {
+      let json;
+      try {
+        json = $(el).contents().text();
+        if (!json) return;
+        let parsed;
+        try {
+          parsed = JSON.parse(json);
+        } catch (err) {
+          // Try to handle multiple JSON objects in array
+          if (json.trim().startsWith('[') && json.trim().endsWith(']')) {
+            try {
+              parsed = JSON.parse(json);
+            } catch {
+              return; // Invalid JSON, skip
+            }
+          } else {
+            return; // Invalid JSON, skip
+          }
+        }
+        // Product(s) may be a single object or array
+        const products = Array.isArray(parsed) ? parsed : [parsed];
+        products.forEach(obj => {
+          if (obj && (obj['@type'] === 'Product' || (Array.isArray(obj['@type']) && obj['@type'].includes('Product')))) {
+            data.products.push(obj);
+          }
+          // Sometimes Product is nested in @graph or itemListElement
+          if (obj && Array.isArray(obj['@graph'])) {
+            obj['@graph'].forEach(g => {
+              if (g && (g['@type'] === 'Product' || (Array.isArray(g['@type']) && g['@type'].includes('Product')))) {
+                data.products.push(g);
+              }
+            });
+          }
+        });
+      } catch (e) {
+        // Safe fallback: ignore malformed JSON-LD blocks
+        return;
+      }
+    });
+
     // Extract meta information
     const metaData = {
       title: $('title').text().trim(),
@@ -352,99 +446,204 @@ class Crawler {
       ogImage: $('meta[property="og:image"]').attr('content') || ''
     };
 
+    // Return with sets converted to arrays for serialization
     return {
       ...data,
       emails: Array.from(data.emails),
       phones: Array.from(data.phones),
+      addresses: Array.from(data.addresses),
       meta: metaData
     };
   }
 
-  // Main crawl method
-  async crawl(url, options = {}) {
-    const { depth = 1, takeScreenshot = true } = options;
-
+  // Fast crawl mode: fetch static HTML and extract structured data
+  async crawlFast(url) {
     // Check robots.txt
     const allowed = await this.checkRobots(url);
     if (!allowed) {
       throw new Error('Crawling not allowed by robots.txt');
     }
+    // Use Axios to fetch HTML
+    const headers = {
+      'User-Agent': this.getRandomUserAgent()
+    };
+    const response = await axios.get(url, {
+      headers,
+      timeout: config.crawler.requestTimeout
+    });
+    const html = response.data;
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname;
+    // Use Cheerio for structured data extraction
+    const structuredData = this.extractStructuredData(html) || {};
+    const meta = structuredData.meta || {};
+    const textContent = cheerio.load(html)('body').text() || "";
+    return {
+      url,
+      domain,
+      html,
+      structuredData,
+      meta,
+      textContent,
+      mode: 'fast'
+    };
+  }
 
+  // Deep crawl mode: use Playwright, reuse browser, reduce wait, optional screenshot
+  async crawlDeep(url, options = {}) {
+    const { takeScreenshot = true } = options;
+    // Check robots.txt
+    const allowed = await this.checkRobots(url);
+    if (!allowed) {
+      throw new Error('Crawling not allowed by robots.txt');
+    }
     await this.init();
-
-    // Wrap the crawling logic with retry
+    // The following approach ensures full coverage for JS-heavy, modern SaaS pages.
     return await this.withRetry(async () => {
       const page = await this.browser.newPage();
-
       try {
-        // Set user agent via headers (rotated if enabled)
         await page.setExtraHTTPHeaders({
           'User-Agent': this.getRandomUserAgent()
         });
-
-        // Navigate to page
+        // Navigate and wait for network idle
         await page.goto(url, {
           waitUntil: 'networkidle',
           timeout: config.crawler.requestTimeout
         });
-
-        // Wait for page to be fully rendered
-        await page.waitForTimeout(2000);
-
-        // Check for CAPTCHA
+        // Wait for main content to load to capture JS-injected DOM
+        await page.waitForSelector('main, header, footer', { timeout: 5000 }).catch(() => {});
+        // Short wait for lazy-loaded content
+        await page.waitForTimeout(1000);
         const hasCaptcha = await this.detectCaptcha(page);
-        if (hasCaptcha) {
-          console.warn(`CAPTCHA detected on ${url}`);
-          // Could throw error or handle differently based on requirements
-        }
-
-        // Handle lazy-loaded content
+        if (hasCaptcha) console.warn(`CAPTCHA detected on ${url}`);
         await this.handleLazyLoad(page);
-
-        // Get HTML
+        // Get HTML content after JS execution
         const html = await page.content();
-
-        // Extract CSS variables
+        // Extract design tokens
         const cssVariables = await this.extractCSSVariables(page);
-
-        // Extract computed styles
         const computedStyles = await this.extractComputedStyles(page);
-
-        // Take screenshot
+        // --- Separate design tokens for easier access ---
+        let designTokens = {
+          colors: this.extractMajorColors(computedStyles),
+          fonts: this.extractMajorFonts(computedStyles),
+          fontSizes: computedStyles.fontSizes || [],
+          spacing: this.extractSpacingScale(computedStyles),
+          borderRadius: computedStyles.borderRadius || [],
+          shadows: computedStyles.shadows || [],
+          cssVariables: cssVariables || {}
+        };
+        // Screenshot if needed
         let screenshot = null;
+        let screenshotColors = [];
         if (takeScreenshot) {
-          screenshot = await page.screenshot({
-            fullPage: true,
-            type: 'png'
-          });
+          screenshot = await page.screenshot({ fullPage: true, type: 'png' });
+          /**
+           * --- Screenshot-based color extraction ---
+           * This step captures visual design tokens (dominant colors) even when DOM/CSS is not directly accessible,
+           * such as on JS-heavy, canvas-based, or obfuscated sites.
+           */
+          try {
+            // Save screenshot to a temp file for ColorThief
+            const tmpDir = os.tmpdir();
+            const tmpFile = path.join(tmpDir, `crawler_screenshot_${Date.now()}_${Math.floor(Math.random()*10000)}.png`);
+            fs.writeFileSync(tmpFile, screenshot);
+            // Use ColorThief to extract dominant colors
+            // getPalette returns an array of [r,g,b] arrays
+            const palette = await ColorThief.getPalette(tmpFile, 8); // top 8 colors
+            screenshotColors = (palette || []).map(rgb => {
+              if (Array.isArray(rgb) && rgb.length === 3) {
+                return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+              }
+              return null;
+            }).filter(Boolean);
+            // Clean up temp file
+            fs.unlinkSync(tmpFile);
+            // Merge screenshot colors into designTokens.colors, ensuring uniqueness
+            designTokens.colors = Array.from(new Set([
+              ...(designTokens.colors || []),
+              ...screenshotColors
+            ]));
+          } catch (e) {
+            // If color extraction fails, continue
+            console.warn('Screenshot-based color extraction failed:', e.message);
+          }
         }
-
-        // Get URL info
         const urlObj = new URL(url);
         const domain = urlObj.hostname;
+        // Extract structured data from fully rendered page
+        const structuredData = this.extractStructuredData(html) || {};
+        // Additional pseudo-products detection for JS-heavy SaaS sites
+        // This captures dynamic feature/plan sections that may represent SaaS products
+        const featureSections = await page.$$eval('section, div', divs =>
+          divs.map(d => {
+            const titleEl = d.querySelector('h2,h3');
+            const buttonEl = d.querySelector('a');
+            const title = titleEl ? titleEl.innerText.trim() : '';
+            const link = buttonEl ? buttonEl.href : null;
+            return title ? { name: title, url: link } : null;
+          }).filter(item => item)
+        );
+        structuredData.products = structuredData.products || [];
+        structuredData.products.push(...featureSections);
 
-        // Use Cheerio for structured data extraction
-        const structuredData = this.extractStructuredData(html);
+        // --- LLM ENRICHMENT: Use LLM to enrich design tokens and features ---
+        // This uses the LLM to infer additional design tokens and features for JS-heavy sites
+        // where scraping may miss tokens or features due to dynamic rendering or obfuscation.
+        if (this.llm) {
+          try {
+            // Infer additional design tokens from HTML and computed styles
+            const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, computedStyles);
+            // Merge LLM tokens into existing designTokens, ensuring uniqueness
+            for (const key in llmDesignTokens) {
+              if (Array.isArray(designTokens[key]) && Array.isArray(llmDesignTokens[key])) {
+                designTokens[key] = Array.from(new Set([...designTokens[key], ...llmDesignTokens[key]]));
+              }
+              // Merge cssVariables object keys if present
+              if (key === 'cssVariables' && llmDesignTokens[key] && typeof llmDesignTokens[key] === 'object') {
+                designTokens.cssVariables = Object.assign({}, designTokens.cssVariables, llmDesignTokens.cssVariables);
+              }
+            }
+          } catch (e) {
+            console.warn('LLM enrichment (design tokens) failed:', e.message);
+          }
+          try {
+            // Infer additional features/pseudo-products from LLM
+            const llmFeatures = await this.llm.extractFeaturesFromLLM(html, structuredData);
+            if (Array.isArray(llmFeatures) && llmFeatures.length > 0) {
+              structuredData.products = structuredData.products || [];
+              // Merge, ensuring uniqueness by name+url
+              const seen = new Set(structuredData.products.map(f => (f.name || '') + '|' + (f.url || '')));
+              llmFeatures.forEach(f => {
+                const key = (f.name || '') + '|' + (f.url || '');
+                if (!seen.has(key)) {
+                  structuredData.products.push(f);
+                  seen.add(key);
+                }
+              });
+            }
+          } catch (e) {
+            console.warn('LLM enrichment (features) failed:', e.message);
+          }
+        }
+        // -------------------------------------------------------------------
 
-        // Get text content for analysis
-        const textContent = await page.evaluate(() => {
-          return document.body.innerText;
-        });
-
-        await page.close();
-
+        const meta = structuredData.meta || {};
+        // Extract all visible text
+        const textContent = await page.evaluate(() => document.body.innerText || "");
         return {
           url,
           domain,
           html,
-          screenshot,
+          structuredData,
+          meta,
+          textContent,
           cssVariables,
           computedStyles,
-          structuredData,
-          textContent,
-          meta: structuredData.meta,
+          designTokens, // LLM- and screenshot-enriched
+          screenshot,
           browserUsed: this.browserType,
-          captchaDetected: hasCaptcha
+          captchaDetected: hasCaptcha,
+          mode: 'deep'
         };
       } catch (error) {
         await page.close();
@@ -453,25 +652,34 @@ class Crawler {
     });
   }
 
+  // Main crawl method: choose fast/deep mode
+  async crawl(url, options = {}) {
+    const mode = (config.crawler && config.crawler.mode) ? config.crawler.mode : 'fast';
+    if (mode === 'deep') {
+      return await this.crawlDeep(url, options);
+    } else {
+      return await this.crawlFast(url);
+    }
+  }
+
   // Extract major colors from computed styles
   extractMajorColors(computedStyles) {
+    if (!computedStyles || !Array.isArray(computedStyles.colors)) return [];
     const colorCounts = {};
-    
+
     computedStyles.colors.forEach(color => {
-      // Normalize rgba to rgb if alpha is 1
       const normalized = color.replace(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*1\)/, 'rgb($1, $2, $3)');
       colorCounts[normalized] = (colorCounts[normalized] || 0) + 1;
     });
 
-    // Sort by frequency and return top colors
     return Object.entries(colorCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([color]) => color);
   }
 
-  // Extract major fonts
   extractMajorFonts(computedStyles) {
+    if (!computedStyles || !Array.isArray(computedStyles.fonts)) return [];
     const fontCounts = {};
     
     computedStyles.fonts.forEach(font => {
@@ -484,16 +692,13 @@ class Crawler {
       .map(([font]) => font);
   }
 
-  // Extract spacing scale
   extractSpacingScale(computedStyles) {
+    if (!computedStyles || !Array.isArray(computedStyles.spacing)) return [];
     const spacingSet = new Set();
-    
+
     computedStyles.spacing.forEach(spacing => {
-      // Parse spacing values
       const values = spacing.split(' ').map(v => v.trim()).filter(v => v);
-      values.forEach(v => {
-        if (v !== '0px') spacingSet.add(v);
-      });
+      values.forEach(v => { if (v !== '0px') spacingSet.add(v); });
     });
 
     return Array.from(spacingSet).sort();
