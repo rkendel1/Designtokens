@@ -749,7 +749,7 @@ class Crawler {
     };
   }
 
-  // Deep crawl mode: use Playwright, reuse browser, reduce wait, optional screenshot
+  // --- Deep crawl mode with JSON sanitization for Postgres and base64 screenshots ---
   async crawlDeep(url, options = {}) {
     const { takeScreenshot = true } = options;
     // Check robots.txt
@@ -758,6 +758,30 @@ class Crawler {
       throw new Error('Crawling not allowed by robots.txt');
     }
     await this.init();
+    // Helper to sanitize objects for JSON/PG
+    function sanitizeForJson(obj) {
+      // Recursively replace undefined/NaN with null, and ensure arrays/objects are valid
+      if (obj === undefined || (typeof obj === 'number' && isNaN(obj))) return null;
+      if (Array.isArray(obj)) {
+        return obj.map(sanitizeForJson);
+      }
+      if (obj && typeof obj === 'object') {
+        const out = {};
+        for (const k in obj) {
+          if (Object.prototype.hasOwnProperty.call(obj, k)) {
+            const value = obj[k];
+            out[k] = sanitizeForJson(value);
+          }
+        }
+        return out;
+      }
+      return obj;
+    }
+    // Safe JSON wrapper for final output
+    function safeJson(obj) {
+      // Recursively sanitize, then use JSON roundtrip to remove undefined/NaN/cyclic/invalid
+      return JSON.parse(JSON.stringify(sanitizeForJson(obj)));
+    }
     // The following approach ensures full coverage for JS-heavy, modern SaaS pages.
     return await this.withRetry(async () => {
       const page = await this.browser.newPage();
@@ -772,18 +796,12 @@ class Crawler {
         });
         // Wait for main content to load to capture JS-injected DOM
         await page.waitForSelector('main, header, footer', { timeout: 5000 }).catch(() => {});
-        
         // Enhanced wait strategy for JS-heavy sites
-        // Wait for common frameworks to hydrate/render
-        await page.waitForTimeout(2000); // Increased from 1000ms to 2000ms
-        
-        // Wait for animations and transitions to complete
+        await page.waitForTimeout(2000);
         await page.evaluate(() => {
           return new Promise((resolve) => {
-            // Wait for animations to settle
             if (document.fonts && document.fonts.ready) {
               document.fonts.ready.then(() => {
-                // Give additional time for any post-font-load rendering
                 setTimeout(resolve, 500);
               });
             } else {
@@ -791,60 +809,48 @@ class Crawler {
             }
           });
         });
-        
         const hasCaptcha = await this.detectCaptcha(page);
         if (hasCaptcha) console.warn(`CAPTCHA detected on ${url}`);
         await this.handleLazyLoad(page);
-        
-        // Additional wait after lazy load to ensure all content is rendered
         await page.waitForTimeout(1000);
-        
-        // Get HTML content after JS execution
         const html = await page.content();
-        // Extract design tokens
         const cssData = await this.extractCSSVariables(page);
         const cssVariables = cssData.variables || {};
         const stylesheetRules = cssData.stylesheetRules || {};
-        
         const computedStyles = await this.extractComputedStyles(page);
-        
-        // Resolve Tailwind and utility classes to CSS values
         const tailwindResolved = await this.resolveTailwindClasses(page);
-        
-        // Merge stylesheet rules, computed styles, and Tailwind resolved values
         const mergedStyles = {
           colors: Array.from(new Set([
-            ...(computedStyles.colors || []), 
+            ...(computedStyles.colors || []),
             ...(stylesheetRules.colors || []),
             ...(tailwindResolved.colors || [])
           ])),
           fonts: Array.from(new Set([
-            ...(computedStyles.fonts || []), 
+            ...(computedStyles.fonts || []),
             ...(stylesheetRules.fonts || []),
             ...(tailwindResolved.fonts || [])
           ])),
           fontSizes: Array.from(new Set([
-            ...(computedStyles.fontSizes || []), 
+            ...(computedStyles.fontSizes || []),
             ...(stylesheetRules.fontSizes || []),
             ...(tailwindResolved.fontSizes || [])
           ])),
           spacing: Array.from(new Set([
-            ...(computedStyles.spacing || []), 
+            ...(computedStyles.spacing || []),
             ...(stylesheetRules.spacing || []),
             ...(tailwindResolved.spacing || [])
           ])),
           borderRadius: Array.from(new Set([
-            ...(computedStyles.borderRadius || []), 
+            ...(computedStyles.borderRadius || []),
             ...(stylesheetRules.borderRadius || []),
             ...(tailwindResolved.borderRadius || [])
           ])),
           shadows: Array.from(new Set([
-            ...(computedStyles.shadows || []), 
+            ...(computedStyles.shadows || []),
             ...(stylesheetRules.shadows || []),
             ...(tailwindResolved.shadows || [])
           ]))
         };
-        
         // --- Separate design tokens for easier access ---
         let designTokens = {
           colors: this.extractMajorColors(mergedStyles),
@@ -855,46 +861,31 @@ class Crawler {
           shadows: mergedStyles.shadows || [],
           cssVariables: cssVariables || {}
         };
-        // Screenshot if needed
         let screenshot = null;
         let screenshotColors = [];
         let sectionColors = [];
         if (takeScreenshot) {
           screenshot = await page.screenshot({ fullPage: true, type: 'png' });
-          /**
-           * --- Screenshot-based color extraction ---
-           * This step captures visual design tokens (dominant colors) even when DOM/CSS is not directly accessible,
-           * such as on JS-heavy, canvas-based, or obfuscated sites.
-           */
           try {
-            // Save screenshot to a temp file for ColorThief
             const tmpDir = os.tmpdir();
             const tmpFile = path.join(tmpDir, `crawler_screenshot_${Date.now()}_${Math.floor(Math.random()*10000)}.png`);
             fs.writeFileSync(tmpFile, screenshot);
-            // Use ColorThief to extract dominant colors
-            // getPalette returns an array of [r,g,b] arrays
-            const palette = await ColorThief.getPalette(tmpFile, 8); // top 8 colors
+            const palette = await ColorThief.getPalette(tmpFile, 8);
             screenshotColors = (palette || []).map(rgb => {
               if (Array.isArray(rgb) && rgb.length === 3) {
                 return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
               }
               return null;
             }).filter(Boolean);
-            // Clean up temp file
             fs.unlinkSync(tmpFile);
           } catch (e) {
-            // If color extraction fails, continue
             console.warn('Screenshot-based color extraction failed:', e.message);
           }
-          
-          // Extract section-level colors for more granular token extraction
           try {
             sectionColors = await this.extractSectionColors(page);
           } catch (e) {
             console.warn('Section-level color extraction failed:', e.message);
           }
-          
-          // Merge screenshot colors and section colors into designTokens.colors, ensuring uniqueness
           designTokens.colors = Array.from(new Set([
             ...(designTokens.colors || []),
             ...screenshotColors,
@@ -903,10 +894,8 @@ class Crawler {
         }
         const urlObj = new URL(url);
         const domain = urlObj.hostname;
-        // Extract structured data from fully rendered page
         const structuredData = this.extractStructuredData(html) || {};
         // Additional pseudo-products detection for JS-heavy SaaS sites
-        // This captures dynamic feature/plan sections that may represent SaaS products
         const featureSections = await page.$$eval('section, div', divs =>
           divs.map(d => {
             const titleEl = d.querySelector('h2,h3');
@@ -918,13 +907,9 @@ class Crawler {
         );
         structuredData.products = structuredData.products || [];
         structuredData.products.push(...featureSections);
-
-        // --- LLM ENRICHMENT: Use LLM to enrich design tokens and features ---
-        // This uses the LLM to infer additional design tokens and features for JS-heavy sites
-        // where scraping may miss tokens or features due to dynamic rendering or obfuscation.
+        // --- LLM ENRICHMENT ---
         if (this.llm) {
           try {
-            // Create enriched context for LLM with all available style information
             const enrichedContext = {
               ...mergedStyles,
               tailwindResolved: tailwindResolved,
@@ -932,15 +917,11 @@ class Crawler {
               sectionColors: sectionColors,
               cssVariables: cssVariables
             };
-            
-            // Infer additional design tokens from HTML and enriched computed styles
             const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, enrichedContext);
-            // Merge LLM tokens into existing designTokens, ensuring uniqueness
             for (const key in llmDesignTokens) {
               if (Array.isArray(designTokens[key]) && Array.isArray(llmDesignTokens[key])) {
                 designTokens[key] = Array.from(new Set([...designTokens[key], ...llmDesignTokens[key]]));
               }
-              // Merge cssVariables object keys if present
               if (key === 'cssVariables' && llmDesignTokens[key] && typeof llmDesignTokens[key] === 'object') {
                 designTokens.cssVariables = Object.assign({}, designTokens.cssVariables, llmDesignTokens.cssVariables);
               }
@@ -949,11 +930,9 @@ class Crawler {
             console.warn('LLM enrichment (design tokens) failed:', e.message);
           }
           try {
-            // Infer additional features/pseudo-products from LLM
             const llmFeatures = await this.llm.extractFeaturesFromLLM(html, structuredData);
             if (Array.isArray(llmFeatures) && llmFeatures.length > 0) {
               structuredData.products = structuredData.products || [];
-              // Merge, ensuring uniqueness by name+url
               const seen = new Set(structuredData.products.map(f => (f.name || '') + '|' + (f.url || '')));
               llmFeatures.forEach(f => {
                 const key = (f.name || '') + '|' + (f.url || '');
@@ -967,26 +946,34 @@ class Crawler {
             console.warn('LLM enrichment (features) failed:', e.message);
           }
         }
-        // -------------------------------------------------------------------
-
         const meta = structuredData.meta || {};
-        // Extract all visible text
         const textContent = await page.evaluate(() => document.body.innerText || "");
-        return {
+        // --- Sanitize designTokens and structuredData for JSON/PG ---
+        const safeDesignTokens = sanitizeForJson(designTokens);
+        const safeStructuredData = sanitizeForJson(structuredData);
+        // Convert screenshot buffer to base64 if present
+        let screenshotBase64 = null;
+        if (screenshot && Buffer.isBuffer(screenshot)) {
+          screenshotBase64 = screenshot.toString('base64');
+        } else if (typeof screenshot === 'string') {
+          screenshotBase64 = screenshot; // already base64 or url
+        }
+        // Compose final result and wrap in safeJson
+        return safeJson({
           url,
           domain,
           html,
-          structuredData,
+          structuredData: safeStructuredData,
           meta,
           textContent,
-          cssVariables,
-          computedStyles: mergedStyles, // Use merged styles for better coverage
-          designTokens, // LLM- and screenshot-enriched
-          screenshot,
+          cssVariables: sanitizeForJson(cssVariables),
+          computedStyles: sanitizeForJson(mergedStyles),
+          designTokens: safeDesignTokens,
+          screenshot: screenshotBase64,
           browserUsed: this.browserType,
           captchaDetected: hasCaptcha,
           mode: 'deep'
-        };
+        });
       } catch (error) {
         await page.close();
         throw error;
