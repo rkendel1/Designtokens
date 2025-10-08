@@ -4,6 +4,18 @@
 
 This document describes the enhancements made to improve design token extraction from modern, JavaScript-heavy SaaS websites. These improvements address the issue where design tokens were coming back empty or incomplete for sites using React, Next.js, Tailwind CSS, CSS-in-JS, and other dynamic rendering approaches.
 
+## Latest Enhancements (v2)
+
+The crawler now includes **5 major new capabilities** for extracting design tokens from JS-heavy SaaS sites:
+
+1. **Tailwind Class Resolver** - Automatically resolves Tailwind CSS utility classes to their actual CSS values
+2. **Hidden Element Capture** - Captures design tokens from modals, dropdowns, tooltips, and other initially-hidden interactive elements
+3. **Section-Level Screenshots** - Extracts colors from individual page sections for more granular token discovery
+4. **Enriched LLM Context** - Provides comprehensive context to LLM including resolved classes, screenshot colors, and all style sources
+5. **Complete Token Merging** - Merges tokens from all sources (computed, stylesheets, Tailwind, screenshots, sections, LLM) with deduplication
+
+These enhancements build upon the existing extraction capabilities to provide the most comprehensive design token extraction available.
+
 ## Problem Statement
 
 The original crawler had difficulty extracting design tokens from:
@@ -20,7 +32,160 @@ The original crawler had difficulty extracting design tokens from:
 
 ## Solutions Implemented
 
-### 1. Enhanced Wait Strategy for JS Rendering
+### 1. Tailwind Class Resolver (NEW)
+
+**Problem:** Tailwind CSS and utility-first frameworks embed styles in class names rather than CSS rules, making them harder to extract.
+
+**Solution:**
+```javascript
+// Resolve Tailwind and utility classes to actual CSS values
+async resolveTailwindClasses(page) {
+  return await page.evaluate(() => {
+    // Map Tailwind class patterns to computed CSS values
+    const tailwindPatterns = {
+      color: /(?:bg|text|border)-(\w+)-(\d+)/,
+      spacing: /(?:p|m|px|py|pl|pr|pt|pb|mx|my|ml|mr|mt|mb)-(\d+|auto)/,
+      borderRadius: /rounded(?:-(\w+))?/,
+      shadow: /shadow-(\w+)/,
+      fontSize: /text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)/,
+      fontFamily: /font-(sans|serif|mono)/
+    };
+    
+    // For each element with Tailwind classes, resolve to computed CSS
+    elementsWithClasses.forEach(el => {
+      const classList = el.className.split(/\s+/);
+      const computed = getComputedStyle(el);
+      
+      classList.forEach(className => {
+        if (tailwindPatterns.color.test(className)) {
+          // Extract resolved color from computed styles
+          if (className.startsWith('bg-')) {
+            resolvedClasses.colors.add(computed.backgroundColor);
+          }
+          // ... similar for other Tailwind utilities
+        }
+      });
+    });
+  });
+}
+```
+
+**Impact:** Captures design tokens from Tailwind and other utility-first CSS frameworks by resolving class names to actual CSS values.
+
+### 2. Hidden and Interactive Element Capture (NEW)
+
+**Problem:** Modals, dropdowns, tooltips, and other interactive elements are often hidden until interaction, causing their design tokens to be missed.
+
+**Solution:**
+```javascript
+// Enhanced visibility check to include hidden but interactable elements
+function isVisibleOrInteractable(el) {
+  const style = getComputedStyle(el);
+  
+  // Include visible elements
+  if (style && style.display !== 'none' && style.visibility !== 'hidden') {
+    return true;
+  }
+  
+  // Include hidden elements that are interactable
+  const interactableSelectors = [
+    '[role="dialog"]', '[role="menu"]', '[role="tooltip"]',
+    '[aria-hidden="true"]', '.modal', '.dropdown', '.popover', 
+    '.tooltip', '[data-modal]', '[data-dropdown]'
+  ];
+  
+  for (const selector of interactableSelectors) {
+    if (el.matches(selector) || el.querySelector(selector)) {
+      return true;
+    }
+  }
+  
+  // Include elements with transition/animation (likely to appear)
+  if (style.transition !== 'all 0s ease 0s' || style.animation !== 'none') {
+    return true;
+  }
+  
+  return false;
+}
+```
+
+**Impact:** Captures tokens from modals, dropdowns, tooltips, and other interactive UI components even when they're initially hidden.
+
+### 3. Section-Level Screenshot Color Extraction (NEW)
+
+**Problem:** Full-page screenshots can miss section-specific color palettes and gradients used in different parts of the page.
+
+**Solution:**
+```javascript
+// Extract colors from individual page sections
+async extractSectionColors(page) {
+  const sections = await page.$$('section, [role="main"], main, article, .container');
+  const sectionColors = new Set();
+  
+  // Process first 5 sections
+  for (const section of sections.slice(0, 5)) {
+    const screenshot = await section.screenshot({ type: 'png' });
+    // Use ColorThief to extract dominant colors
+    const palette = await ColorThief.getPalette(tmpFile, 5);
+    palette.forEach(rgb => {
+      sectionColors.add(`rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`);
+    });
+  }
+  
+  return Array.from(sectionColors);
+}
+```
+
+**Impact:** Captures section-specific color palettes, gradients, and visual elements that might be missed in full-page analysis.
+
+### 4. Enriched LLM Context (NEW)
+
+**Problem:** LLM needed more comprehensive context to accurately infer design tokens from complex, modern web applications.
+
+**Solution:**
+```javascript
+// Create enriched context with all available style information
+const enrichedContext = {
+  ...mergedStyles,
+  tailwindResolved: tailwindResolved,      // Resolved Tailwind classes
+  screenshotColors: screenshotColors,      // Full-page screenshot colors
+  sectionColors: sectionColors,            // Section-level colors
+  cssVariables: cssVariables               // CSS custom properties
+};
+
+// Pass enriched context to LLM for inference
+const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, enrichedContext);
+```
+
+**Impact:** Provides LLM with comprehensive context including resolved utility classes, visual colors, and all extracted styles for better token inference.
+
+### 5. Complete Token Merging (NEW)
+
+**Problem:** Tokens from different sources weren't being comprehensively merged and deduplicated.
+
+**Solution:**
+```javascript
+// Merge all token sources with deduplication
+const mergedStyles = {
+  colors: Array.from(new Set([
+    ...(computedStyles.colors || []), 
+    ...(stylesheetRules.colors || []),
+    ...(tailwindResolved.colors || [])
+  ])),
+  // ... similar for other properties
+};
+
+// Then merge with screenshot and section colors
+designTokens.colors = Array.from(new Set([
+  ...(designTokens.colors || []),
+  ...screenshotColors,
+  ...sectionColors
+]));
+```
+
+**Impact:** Ensures all design tokens from every source are captured and deduplicated for comprehensive coverage.
+
+### 6. Enhanced Wait Strategy for JS Rendering
 
 **Problem:** Modern frameworks take time to hydrate and render content. The original 1-second wait was insufficient.
 
@@ -49,7 +214,7 @@ await page.waitForTimeout(1000);
 
 **Impact:** Ensures all dynamic content is fully rendered before extraction.
 
-### 2. Stylesheet Rule Extraction
+### 7. Stylesheet Rule Extraction
 
 **Problem:** Only CSS variables were being extracted from stylesheets, missing actual style values.
 
@@ -87,7 +252,7 @@ if (rule.style) {
 
 **Impact:** Captures tokens from Tailwind utility classes and CSS-in-JS styles that are embedded in stylesheets.
 
-### 3. Inline `<style>` Tag Extraction
+### 8. Inline `<style>` Tag Extraction
 
 **Problem:** CSS-in-JS libraries often inject styles via inline `<style>` tags, which weren't being parsed.
 
@@ -113,7 +278,7 @@ styleTags.forEach(styleTag => {
 
 **Impact:** Captures design tokens from CSS-in-JS libraries like styled-components, emotion, and similar.
 
-### 4. Improved Visibility Detection
+### 9. Improved Visibility Detection
 
 **Problem:** The original visibility check excluded elements with `opacity: 0`, which might still contribute valuable design tokens.
 
@@ -129,7 +294,7 @@ return style && style.display !== 'none' && style.visibility !== 'hidden';
 
 **Impact:** Elements with zero opacity or CSS transforms are now included in token extraction.
 
-### 5. Merged Style Sources
+### 10. Legacy Merged Style Sources
 
 **Problem:** Tokens from different sources (computed styles, stylesheets, inline styles) weren't being combined.
 
@@ -151,7 +316,7 @@ const mergedStyles = {
 
 **Impact:** Comprehensive token extraction from all available sources.
 
-### 6. Enhanced Data Return Structure
+### 11. Enhanced Data Return Structure
 
 **Problem:** The return structure didn't clearly indicate which styles came from which sources.
 

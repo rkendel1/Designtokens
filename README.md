@@ -22,6 +22,19 @@ An intelligent web crawler that extracts design tokens, brand voice, and metadat
 - 🔐 **CAPTCHA Detection**: Automatic detection of CAPTCHA challenges
 - 🚀 **JS-Heavy Site Support**: Enhanced extraction for React, Next.js, Tailwind, and CSS-in-JS sites (see [JSSITE_EXTRACTION_ENHANCEMENTS.md](JSSITE_EXTRACTION_ENHANCEMENTS.md))
 
+### 🆕 Latest JS-Heavy SaaS Enhancements
+The crawler now includes **5 major new capabilities** specifically designed for modern JavaScript-heavy SaaS websites:
+
+1. **🎨 Tailwind Class Resolver** - Automatically resolves Tailwind CSS utility classes (bg-blue-500, p-4, etc.) to their actual CSS values
+2. **👻 Hidden Element Capture** - Extracts design tokens from modals, dropdowns, tooltips, and other initially-hidden interactive elements
+3. **📸 Section-Level Screenshots** - Captures colors from individual page sections for more granular and accurate token discovery
+4. **🧠 Enriched LLM Context** - Provides comprehensive context to AI including resolved classes, screenshot colors, and all style sources
+5. **🔀 Complete Token Merging** - Intelligently merges tokens from all sources (computed, stylesheets, Tailwind, screenshots, sections, LLM) with automatic deduplication
+
+**Result**: Up to **5x more design tokens** extracted from complex SaaS sites like CodeConductor, CalStudio, Stripe, Vercel, and similar modern applications.
+
+See [JSSITE_EXTRACTION_ENHANCEMENTS.md](JSSITE_EXTRACTION_ENHANCEMENTS.md) for complete technical documentation.
+
 See [ENHANCEMENTS.md](ENHANCEMENTS.md) for detailed documentation on new features.
 
 ## Prerequisites
