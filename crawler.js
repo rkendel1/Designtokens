@@ -181,6 +181,109 @@ class Crawler {
     }
   }
 
+  // Resolve Tailwind and utility classes to CSS values
+  async resolveTailwindClasses(page) {
+    return await page.evaluate(() => {
+      const resolvedClasses = {
+        colors: new Set(),
+        fonts: new Set(),
+        fontSizes: new Set(),
+        spacing: new Set(),
+        borderRadius: new Set(),
+        shadows: new Set()
+      };
+
+      // Common Tailwind patterns to resolve
+      const tailwindPatterns = {
+        // Color patterns: bg-{color}-{shade}, text-{color}-{shade}
+        color: /(?:bg|text|border)-(\w+)-(\d+)/,
+        // Spacing: p-{size}, m-{size}, px-{size}, py-{size}, etc.
+        spacing: /(?:p|m|px|py|pl|pr|pt|pb|mx|my|ml|mr|mt|mb)-(\d+|auto)/,
+        // Border radius: rounded-{size}
+        borderRadius: /rounded(?:-(\w+))?/,
+        // Shadow: shadow-{size}
+        shadow: /shadow-(\w+)/,
+        // Font size: text-{size}
+        fontSize: /text-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)/,
+        // Font family: font-{family}
+        fontFamily: /font-(sans|serif|mono)/
+      };
+
+      // Get all elements with classes
+      const elementsWithClasses = Array.from(document.querySelectorAll('[class]'));
+      
+      elementsWithClasses.forEach(el => {
+        const classList = el.className.split(/\s+/);
+        const computed = getComputedStyle(el);
+        
+        classList.forEach(className => {
+          // Check if it's a Tailwind utility class and get computed value
+          if (tailwindPatterns.color.test(className)) {
+            if (className.startsWith('bg-')) {
+              const bgColor = computed.backgroundColor;
+              if (bgColor && bgColor !== 'rgba(0, 0, 0, 0)' && bgColor !== 'transparent') {
+                resolvedClasses.colors.add(bgColor);
+              }
+            } else if (className.startsWith('text-')) {
+              const textColor = computed.color;
+              if (textColor && textColor !== 'rgba(0, 0, 0, 0)') {
+                resolvedClasses.colors.add(textColor);
+              }
+            } else if (className.startsWith('border-')) {
+              const borderColor = computed.borderColor;
+              if (borderColor && borderColor !== 'rgba(0, 0, 0, 0)') {
+                resolvedClasses.colors.add(borderColor);
+              }
+            }
+          }
+          
+          if (tailwindPatterns.spacing.test(className)) {
+            if (className.startsWith('p')) {
+              const padding = computed.padding;
+              if (padding && padding !== '0px') resolvedClasses.spacing.add(padding);
+            } else if (className.startsWith('m')) {
+              const margin = computed.margin;
+              if (margin && margin !== '0px') resolvedClasses.spacing.add(margin);
+            }
+          }
+          
+          if (tailwindPatterns.borderRadius.test(className)) {
+            const borderRadius = computed.borderRadius;
+            if (borderRadius && borderRadius !== '0px') {
+              resolvedClasses.borderRadius.add(borderRadius);
+            }
+          }
+          
+          if (tailwindPatterns.shadow.test(className)) {
+            const boxShadow = computed.boxShadow;
+            if (boxShadow && boxShadow !== 'none') {
+              resolvedClasses.shadows.add(boxShadow);
+            }
+          }
+          
+          if (tailwindPatterns.fontSize.test(className)) {
+            const fontSize = computed.fontSize;
+            if (fontSize) resolvedClasses.fontSizes.add(fontSize);
+          }
+          
+          if (tailwindPatterns.fontFamily.test(className)) {
+            const fontFamily = computed.fontFamily;
+            if (fontFamily) resolvedClasses.fonts.add(fontFamily);
+          }
+        });
+      });
+
+      return {
+        colors: Array.from(resolvedClasses.colors).filter(Boolean),
+        fonts: Array.from(resolvedClasses.fonts).filter(Boolean),
+        fontSizes: Array.from(resolvedClasses.fontSizes).filter(Boolean),
+        spacing: Array.from(resolvedClasses.spacing).filter(Boolean),
+        borderRadius: Array.from(resolvedClasses.borderRadius).filter(Boolean),
+        shadows: Array.from(resolvedClasses.shadows).filter(Boolean)
+      };
+    });
+  }
+
   // Extract CSS variables and stylesheet rules from page
   async extractCSSVariables(page) {
     return await page.evaluate(() => {
@@ -309,21 +412,43 @@ class Crawler {
 
   /**
    * Enhanced design token extraction for modern JS-heavy SaaS pages:
-   * - Traverses all visible elements in the body, not just top-level children and key selectors.
+   * - Traverses all visible and hidden/interactable elements in the body.
    * - Aggregates inline styles, computed styles, and pseudo-element styles where possible.
    * - Collects all unique colors, fonts, font sizes, spacing, border radius, and shadows.
    * - Ensures full coverage for highly dynamic, componentized, JS-heavy UIs.
    */
   async extractComputedStyles(page) {
     return await page.evaluate(() => {
-      // Helper to check if an element is visible
-      // Enhanced to handle edge cases for JS-heavy sites
-      function isVisible(el) {
+      // Helper to check if an element is visible or interactable
+      // Enhanced to capture hidden elements that may become visible on interaction
+      function isVisibleOrInteractable(el) {
         if (!el || !(el instanceof Element)) return false;
         const style = getComputedStyle(el);
-        // More permissive visibility check to capture elements that may be animated or transformed
-        // Elements with opacity close to 0 or hidden by transforms may still contribute to design tokens
-        return style && style.display !== 'none' && style.visibility !== 'hidden';
+        
+        // Include visible elements
+        if (style && style.display !== 'none' && style.visibility !== 'hidden') {
+          return true;
+        }
+        
+        // Include hidden elements that are interactable (modals, dropdowns, tooltips, etc.)
+        const interactableSelectors = [
+          '[role="dialog"]', '[role="menu"]', '[role="tooltip"]',
+          '[aria-hidden="true"]', '.modal', '.dropdown', '.popover', 
+          '.tooltip', '[data-modal]', '[data-dropdown]'
+        ];
+        
+        for (const selector of interactableSelectors) {
+          if (el.matches(selector) || el.querySelector(selector)) {
+            return true;
+          }
+        }
+        
+        // Include elements with transition/animation properties (likely to appear)
+        if (style.transition !== 'all 0s ease 0s' || style.animation !== 'none') {
+          return true;
+        }
+        
+        return false;
       }
 
       // Sets for deduplication
@@ -336,8 +461,8 @@ class Crawler {
         shadows: new Set()
       };
 
-      // Traverse all visible elements in body
-      const allElements = Array.from(document.body.querySelectorAll('*')).filter(isVisible);
+      // Traverse all visible and interactable elements in body
+      const allElements = Array.from(document.body.querySelectorAll('*')).filter(isVisibleOrInteractable);
       // Always include body itself
       allElements.unshift(document.body);
 
@@ -412,6 +537,50 @@ class Crawler {
         shadows: Array.from(styles.shadows).filter(Boolean)
       };
     });
+  }
+
+  // Extract colors from section-level screenshots
+  async extractSectionColors(page) {
+    try {
+      const sections = await page.$$('section, [role="main"], main, article, .container, [class*="section"]');
+      const sectionColors = new Set();
+      
+      // Limit to first 5 sections to avoid performance issues
+      const sectionsToProcess = sections.slice(0, 5);
+      
+      for (const section of sectionsToProcess) {
+        try {
+          // Take screenshot of the section
+          const screenshot = await section.screenshot({ type: 'png' });
+          
+          // Save to temp file for ColorThief
+          const tmpDir = os.tmpdir();
+          const tmpFile = path.join(tmpDir, `section_${Date.now()}_${Math.floor(Math.random()*10000)}.png`);
+          fs.writeFileSync(tmpFile, screenshot);
+          
+          // Extract dominant colors from section
+          const palette = await ColorThief.getPalette(tmpFile, 5); // top 5 colors per section
+          if (palette) {
+            palette.forEach(rgb => {
+              if (Array.isArray(rgb) && rgb.length === 3) {
+                sectionColors.add(`rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`);
+              }
+            });
+          }
+          
+          // Clean up temp file
+          fs.unlinkSync(tmpFile);
+        } catch (e) {
+          // Skip sections that fail to screenshot
+          continue;
+        }
+      }
+      
+      return Array.from(sectionColors);
+    } catch (error) {
+      console.warn('Section-level color extraction failed:', error.message);
+      return [];
+    }
   }
 
   // Extract structured data using Cheerio
@@ -639,14 +808,41 @@ class Crawler {
         
         const computedStyles = await this.extractComputedStyles(page);
         
-        // Merge stylesheet rules with computed styles
+        // Resolve Tailwind and utility classes to CSS values
+        const tailwindResolved = await this.resolveTailwindClasses(page);
+        
+        // Merge stylesheet rules, computed styles, and Tailwind resolved values
         const mergedStyles = {
-          colors: Array.from(new Set([...(computedStyles.colors || []), ...(stylesheetRules.colors || [])])),
-          fonts: Array.from(new Set([...(computedStyles.fonts || []), ...(stylesheetRules.fonts || [])])),
-          fontSizes: Array.from(new Set([...(computedStyles.fontSizes || []), ...(stylesheetRules.fontSizes || [])])),
-          spacing: Array.from(new Set([...(computedStyles.spacing || []), ...(stylesheetRules.spacing || [])])),
-          borderRadius: Array.from(new Set([...(computedStyles.borderRadius || []), ...(stylesheetRules.borderRadius || [])])),
-          shadows: Array.from(new Set([...(computedStyles.shadows || []), ...(stylesheetRules.shadows || [])]))
+          colors: Array.from(new Set([
+            ...(computedStyles.colors || []), 
+            ...(stylesheetRules.colors || []),
+            ...(tailwindResolved.colors || [])
+          ])),
+          fonts: Array.from(new Set([
+            ...(computedStyles.fonts || []), 
+            ...(stylesheetRules.fonts || []),
+            ...(tailwindResolved.fonts || [])
+          ])),
+          fontSizes: Array.from(new Set([
+            ...(computedStyles.fontSizes || []), 
+            ...(stylesheetRules.fontSizes || []),
+            ...(tailwindResolved.fontSizes || [])
+          ])),
+          spacing: Array.from(new Set([
+            ...(computedStyles.spacing || []), 
+            ...(stylesheetRules.spacing || []),
+            ...(tailwindResolved.spacing || [])
+          ])),
+          borderRadius: Array.from(new Set([
+            ...(computedStyles.borderRadius || []), 
+            ...(stylesheetRules.borderRadius || []),
+            ...(tailwindResolved.borderRadius || [])
+          ])),
+          shadows: Array.from(new Set([
+            ...(computedStyles.shadows || []), 
+            ...(stylesheetRules.shadows || []),
+            ...(tailwindResolved.shadows || [])
+          ]))
         };
         
         // --- Separate design tokens for easier access ---
@@ -662,6 +858,7 @@ class Crawler {
         // Screenshot if needed
         let screenshot = null;
         let screenshotColors = [];
+        let sectionColors = [];
         if (takeScreenshot) {
           screenshot = await page.screenshot({ fullPage: true, type: 'png' });
           /**
@@ -685,15 +882,24 @@ class Crawler {
             }).filter(Boolean);
             // Clean up temp file
             fs.unlinkSync(tmpFile);
-            // Merge screenshot colors into designTokens.colors, ensuring uniqueness
-            designTokens.colors = Array.from(new Set([
-              ...(designTokens.colors || []),
-              ...screenshotColors
-            ]));
           } catch (e) {
             // If color extraction fails, continue
             console.warn('Screenshot-based color extraction failed:', e.message);
           }
+          
+          // Extract section-level colors for more granular token extraction
+          try {
+            sectionColors = await this.extractSectionColors(page);
+          } catch (e) {
+            console.warn('Section-level color extraction failed:', e.message);
+          }
+          
+          // Merge screenshot colors and section colors into designTokens.colors, ensuring uniqueness
+          designTokens.colors = Array.from(new Set([
+            ...(designTokens.colors || []),
+            ...screenshotColors,
+            ...sectionColors
+          ]));
         }
         const urlObj = new URL(url);
         const domain = urlObj.hostname;
@@ -718,8 +924,17 @@ class Crawler {
         // where scraping may miss tokens or features due to dynamic rendering or obfuscation.
         if (this.llm) {
           try {
-            // Infer additional design tokens from HTML and computed styles
-            const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, mergedStyles);
+            // Create enriched context for LLM with all available style information
+            const enrichedContext = {
+              ...mergedStyles,
+              tailwindResolved: tailwindResolved,
+              screenshotColors: screenshotColors,
+              sectionColors: sectionColors,
+              cssVariables: cssVariables
+            };
+            
+            // Infer additional design tokens from HTML and enriched computed styles
+            const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, enrichedContext);
             // Merge LLM tokens into existing designTokens, ensuring uniqueness
             for (const key in llmDesignTokens) {
               if (Array.isArray(designTokens[key]) && Array.isArray(llmDesignTokens[key])) {
