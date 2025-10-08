@@ -15,6 +15,19 @@ Currently, the API does not require authentication. Rate limiting is applied per
 - 100 requests per 15 minutes per IP address
 - Cached responses don't count towards rate limit
 
+## Enhanced Features
+
+The crawler now supports advanced features for improved flexibility and robustness:
+
+- **LLM Provider Selection**: Switch between OpenAI and local LLMs (Ollama)
+- **Multi-Browser Support**: Use Chromium, Firefox, or WebKit
+- **User Agent Rotation**: Appear as different browsers/devices
+- **Retry Logic**: Automatic retry with exponential backoff
+- **Lazy Load Handling**: Capture dynamically loaded content
+- **CAPTCHA Detection**: Automatic CAPTCHA detection and reporting
+
+Configure these features via environment variables. See [ENHANCEMENTS.md](ENHANCEMENTS.md) for details.
+
 ## Endpoints
 
 ### Health Check
@@ -61,7 +74,9 @@ Crawl a website and extract design tokens, brand voice, and metadata.
     "url": "https://example.com",
     "domain": "example.com",
     "title": "Example Site",
-    "description": "An example website"
+    "description": "An example website",
+    "browserUsed": "chromium",
+    "captchaDetected": false
   },
   "companyInfo": {
     "name": "Example Corp",
@@ -101,6 +116,10 @@ Crawl a website and extract design tokens, brand voice, and metadata.
   "fromCache": false
 }
 ```
+
+**New Response Fields:**
+- `browserUsed` (string): The browser engine used for crawling (chromium/firefox/webkit)
+- `captchaDetected` (boolean): Whether a CAPTCHA challenge was detected on the page
 
 **Status Codes:**
 - `200 OK`: Successfully crawled
