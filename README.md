@@ -20,6 +20,7 @@ An intelligent web crawler that extracts design tokens, brand voice, and metadat
 - 🔁 **Intelligent Retry Logic**: Automatic retry with exponential backoff for failed requests
 - 📜 **Lazy Load Handling**: Captures dynamically loaded content by simulating scroll behavior
 - 🔐 **CAPTCHA Detection**: Automatic detection of CAPTCHA challenges
+- 🚀 **JS-Heavy Site Support**: Enhanced extraction for React, Next.js, Tailwind, and CSS-in-JS sites (see [JSSITE_EXTRACTION_ENHANCEMENTS.md](JSSITE_EXTRACTION_ENHANCEMENTS.md))
 
 See [ENHANCEMENTS.md](ENHANCEMENTS.md) for detailed documentation on new features.
 
