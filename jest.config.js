@@ -5,6 +5,8 @@ module.exports = {
     '*.js',
     '!server.js',
     '!jest.config.js',
+    '!examples.js',
+    '!examples-enhanced.js',
     '!coverage/**'
   ],
   testMatch: [

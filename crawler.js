@@ -181,10 +181,19 @@ class Crawler {
     }
   }
 
-  // Extract CSS variables from page
+  // Extract CSS variables and stylesheet rules from page
   async extractCSSVariables(page) {
     return await page.evaluate(() => {
       const variables = {};
+      const stylesheetRules = {
+        colors: new Set(),
+        fonts: new Set(),
+        fontSizes: new Set(),
+        spacing: new Set(),
+        borderRadius: new Set(),
+        shadows: new Set()
+      };
+      
       const sheets = Array.from(document.styleSheets);
       
       sheets.forEach(sheet => {
@@ -192,16 +201,85 @@ class Crawler {
           const rules = Array.from(sheet.cssRules || []);
           rules.forEach(rule => {
             if (rule.style) {
+              // Extract CSS variables
               for (let i = 0; i < rule.style.length; i++) {
                 const prop = rule.style[i];
                 if (prop.startsWith('--')) {
                   variables[prop] = rule.style.getPropertyValue(prop).trim();
                 }
               }
+              
+              // Extract design token values from stylesheet rules
+              // This captures Tailwind, CSS-in-JS, and other styles that may not be in computed styles
+              const style = rule.style;
+              
+              // Colors
+              if (style.color) stylesheetRules.colors.add(style.color);
+              if (style.backgroundColor) stylesheetRules.colors.add(style.backgroundColor);
+              if (style.borderColor) stylesheetRules.colors.add(style.borderColor);
+              if (style.fill) stylesheetRules.colors.add(style.fill);
+              if (style.stroke) stylesheetRules.colors.add(style.stroke);
+              
+              // Typography
+              if (style.fontFamily) stylesheetRules.fonts.add(style.fontFamily);
+              if (style.fontSize) stylesheetRules.fontSizes.add(style.fontSize);
+              
+              // Spacing
+              if (style.padding) stylesheetRules.spacing.add(style.padding);
+              if (style.margin) stylesheetRules.spacing.add(style.margin);
+              if (style.gap) stylesheetRules.spacing.add(style.gap);
+              
+              // Border radius
+              if (style.borderRadius) stylesheetRules.borderRadius.add(style.borderRadius);
+              
+              // Shadows
+              if (style.boxShadow) stylesheetRules.shadows.add(style.boxShadow);
+              if (style.textShadow) stylesheetRules.shadows.add(style.textShadow);
             }
           });
         } catch (e) {
           // CORS or security errors, skip
+        }
+      });
+      
+      // Also extract from inline <style> tags which may contain CSS-in-JS or Tailwind
+      const styleTags = Array.from(document.querySelectorAll('style'));
+      styleTags.forEach(styleTag => {
+        const cssText = styleTag.textContent || '';
+        
+        // Extract color values using regex
+        const colorRegex = /(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\))/g;
+        const colorMatches = cssText.match(colorRegex);
+        if (colorMatches) {
+          colorMatches.forEach(color => stylesheetRules.colors.add(color));
+        }
+        
+        // Extract font families
+        const fontFamilyRegex = /font-family\s*:\s*([^;]+)/gi;
+        let fontMatch;
+        while ((fontMatch = fontFamilyRegex.exec(cssText)) !== null) {
+          stylesheetRules.fonts.add(fontMatch[1].trim());
+        }
+        
+        // Extract font sizes
+        const fontSizeRegex = /font-size\s*:\s*([^;]+)/gi;
+        let sizeMatch;
+        while ((sizeMatch = fontSizeRegex.exec(cssText)) !== null) {
+          stylesheetRules.fontSizes.add(sizeMatch[1].trim());
+        }
+        
+        // Extract border radius
+        const borderRadiusRegex = /border-radius\s*:\s*([^;]+)/gi;
+        let radiusMatch;
+        while ((radiusMatch = borderRadiusRegex.exec(cssText)) !== null) {
+          stylesheetRules.borderRadius.add(radiusMatch[1].trim());
+        }
+        
+        // Extract box shadows
+        const boxShadowRegex = /box-shadow\s*:\s*([^;]+)/gi;
+        let shadowMatch;
+        while ((shadowMatch = boxShadowRegex.exec(cssText)) !== null) {
+          stylesheetRules.shadows.add(shadowMatch[1].trim());
         }
       });
       
@@ -215,7 +293,17 @@ class Crawler {
         }
       }
       
-      return variables;
+      return {
+        variables,
+        stylesheetRules: {
+          colors: Array.from(stylesheetRules.colors).filter(Boolean),
+          fonts: Array.from(stylesheetRules.fonts).filter(Boolean),
+          fontSizes: Array.from(stylesheetRules.fontSizes).filter(Boolean),
+          spacing: Array.from(stylesheetRules.spacing).filter(Boolean),
+          borderRadius: Array.from(stylesheetRules.borderRadius).filter(Boolean),
+          shadows: Array.from(stylesheetRules.shadows).filter(Boolean)
+        }
+      };
     });
   }
 
@@ -229,10 +317,13 @@ class Crawler {
   async extractComputedStyles(page) {
     return await page.evaluate(() => {
       // Helper to check if an element is visible
+      // Enhanced to handle edge cases for JS-heavy sites
       function isVisible(el) {
         if (!el || !(el instanceof Element)) return false;
         const style = getComputedStyle(el);
-        return style && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+        // More permissive visibility check to capture elements that may be animated or transformed
+        // Elements with opacity close to 0 or hidden by transforms may still contribute to design tokens
+        return style && style.display !== 'none' && style.visibility !== 'hidden';
       }
 
       // Sets for deduplication
@@ -512,24 +603,60 @@ class Crawler {
         });
         // Wait for main content to load to capture JS-injected DOM
         await page.waitForSelector('main, header, footer', { timeout: 5000 }).catch(() => {});
-        // Short wait for lazy-loaded content
-        await page.waitForTimeout(1000);
+        
+        // Enhanced wait strategy for JS-heavy sites
+        // Wait for common frameworks to hydrate/render
+        await page.waitForTimeout(2000); // Increased from 1000ms to 2000ms
+        
+        // Wait for animations and transitions to complete
+        await page.evaluate(() => {
+          return new Promise((resolve) => {
+            // Wait for animations to settle
+            if (document.fonts && document.fonts.ready) {
+              document.fonts.ready.then(() => {
+                // Give additional time for any post-font-load rendering
+                setTimeout(resolve, 500);
+              });
+            } else {
+              setTimeout(resolve, 500);
+            }
+          });
+        });
+        
         const hasCaptcha = await this.detectCaptcha(page);
         if (hasCaptcha) console.warn(`CAPTCHA detected on ${url}`);
         await this.handleLazyLoad(page);
+        
+        // Additional wait after lazy load to ensure all content is rendered
+        await page.waitForTimeout(1000);
+        
         // Get HTML content after JS execution
         const html = await page.content();
         // Extract design tokens
-        const cssVariables = await this.extractCSSVariables(page);
+        const cssData = await this.extractCSSVariables(page);
+        const cssVariables = cssData.variables || {};
+        const stylesheetRules = cssData.stylesheetRules || {};
+        
         const computedStyles = await this.extractComputedStyles(page);
+        
+        // Merge stylesheet rules with computed styles
+        const mergedStyles = {
+          colors: Array.from(new Set([...(computedStyles.colors || []), ...(stylesheetRules.colors || [])])),
+          fonts: Array.from(new Set([...(computedStyles.fonts || []), ...(stylesheetRules.fonts || [])])),
+          fontSizes: Array.from(new Set([...(computedStyles.fontSizes || []), ...(stylesheetRules.fontSizes || [])])),
+          spacing: Array.from(new Set([...(computedStyles.spacing || []), ...(stylesheetRules.spacing || [])])),
+          borderRadius: Array.from(new Set([...(computedStyles.borderRadius || []), ...(stylesheetRules.borderRadius || [])])),
+          shadows: Array.from(new Set([...(computedStyles.shadows || []), ...(stylesheetRules.shadows || [])]))
+        };
+        
         // --- Separate design tokens for easier access ---
         let designTokens = {
-          colors: this.extractMajorColors(computedStyles),
-          fonts: this.extractMajorFonts(computedStyles),
-          fontSizes: computedStyles.fontSizes || [],
-          spacing: this.extractSpacingScale(computedStyles),
-          borderRadius: computedStyles.borderRadius || [],
-          shadows: computedStyles.shadows || [],
+          colors: this.extractMajorColors(mergedStyles),
+          fonts: this.extractMajorFonts(mergedStyles),
+          fontSizes: mergedStyles.fontSizes || [],
+          spacing: this.extractSpacingScale(mergedStyles),
+          borderRadius: mergedStyles.borderRadius || [],
+          shadows: mergedStyles.shadows || [],
           cssVariables: cssVariables || {}
         };
         // Screenshot if needed
@@ -592,7 +719,7 @@ class Crawler {
         if (this.llm) {
           try {
             // Infer additional design tokens from HTML and computed styles
-            const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, computedStyles);
+            const llmDesignTokens = await this.llm.inferDesignTokensFromLLM(html, mergedStyles);
             // Merge LLM tokens into existing designTokens, ensuring uniqueness
             for (const key in llmDesignTokens) {
               if (Array.isArray(designTokens[key]) && Array.isArray(llmDesignTokens[key])) {
@@ -638,7 +765,7 @@ class Crawler {
           meta,
           textContent,
           cssVariables,
-          computedStyles,
+          computedStyles: mergedStyles, // Use merged styles for better coverage
           designTokens, // LLM- and screenshot-enriched
           screenshot,
           browserUsed: this.browserType,
