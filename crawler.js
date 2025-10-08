@@ -377,8 +377,10 @@ class Crawler {
       const page = await this.browser.newPage();
 
       try {
-        // Set user agent (rotated if enabled)
-        await page.setUserAgent(this.getRandomUserAgent());
+        // Set user agent via headers (rotated if enabled)
+        await page.setExtraHTTPHeaders({
+          'User-Agent': this.getRandomUserAgent()
+        });
 
         // Navigate to page
         await page.goto(url, {

@@ -17,7 +17,7 @@ module.exports = {
   },
   crawler: {
     maxDepth: parseInt(process.env.MAX_CRAWL_DEPTH) || 3,
-    requestTimeout: parseInt(process.env.REQUEST_TIMEOUT_MS) || 30000,
+    requestTimeout: parseInt(process.env.REQUEST_TIMEOUT_MS) || 60000,
     maxConcurrent: parseInt(process.env.MAX_CONCURRENT_REQUESTS) || 5,
     userAgent: 'DesignTokensCrawler/1.0',
     rotateUserAgents: process.env.ROTATE_USER_AGENTS === 'true',
