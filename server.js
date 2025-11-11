@@ -37,6 +37,9 @@ app.post('/api/crawl', async (req, res) => {
     const { url, depth = 1, skipCache = false } = req.body;
 
     // Validate URL
+    if (!url) {
+      return res.status(400).json({ error: 'URL is required' });
+    }
     let parsedUrl;
     try {
       parsedUrl = new URL(url);
