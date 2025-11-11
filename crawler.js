@@ -123,11 +123,11 @@ class Crawler {
     const scrollDelay = config.crawler.scrollDelay;
 
     for (let i = 0; i < scrollSteps; i++) {
-      await page.evaluate((step, total) => {
+      await page.evaluate(({ step, total }) => {
         const scrollHeight = document.body.scrollHeight;
         const stepHeight = scrollHeight / total;
         window.scrollTo(0, stepHeight * (step + 1));
-      }, i, scrollSteps);
+      }, { step: i, total: scrollSteps });
       
       await this.sleep(scrollDelay);
     }
