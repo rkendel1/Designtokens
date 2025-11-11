@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Design Tokens Crawler</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main>
+        <h1>Design Tokens Crawler</h1>
+        <p>Enter a URL to crawl and extract its design tokens.</p>
+        <form id="crawl-form">
+            <input type="url" id="url-input" placeholder="https://example.com" required>
+            <button type="submit" id="submit-button">Crawl</button>
+        </form>
+        <div id="results-container">
+            <h2>Results</h2>
+            <pre id="results">Your crawl results will appear here.</pre>
+        </div>
+    </main>
+    <script>
+        const form = document.getElementById('crawl-form');
+        const urlInput = document.getElementById('url-input');
+        const resultsEl = document.getElementById('results');
+        const submitButton = document.getElementById('submit-button');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const url = urlInput.value;
+            
+            resultsEl.textContent = 'Crawling... this may take a moment.';
+            submitButton.disabled = true;
+            submitButton.textContent = 'Crawling...';
+
+            try {
+                const response = await fetch('/api/crawl', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'An unknown error occurred.');
+                }
+
+                resultsEl.textContent = JSON.stringify(data, null, 2);
+
+            } catch (error) {
+                resultsEl.textContent = `Error: ${error.message}`;
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Crawl';
+            }
+        });
+    </script>
+</body>
+</html>

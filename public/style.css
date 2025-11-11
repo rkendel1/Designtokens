@@ -1,0 +1,82 @@
+body {
+    font-family: sans-serif;
+    background-color: #f0f2f5;
+    color: #333;
+    margin: 0;
+    padding: 2rem;
+}
+
+main {
+    max-width: 800px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+h1 {
+    color: #111;
+    text-align: center;
+    margin-bottom: 0.5rem;
+}
+
+p {
+    text-align: center;
+    color: #666;
+    margin-bottom: 2rem;
+}
+
+#crawl-form {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+#url-input {
+    flex-grow: 1;
+    padding: 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+#submit-button {
+    padding: 0.75rem 1.5rem;
+    border: none;
+    background-color: #007bff;
+    color: white;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#submit-button:hover {
+    background-color: #0056b3;
+}
+
+#submit-button:disabled {
+    background-color: #aaa;
+    cursor: not-allowed;
+}
+
+#results-container {
+    border-top: 1px solid #eee;
+    padding-top: 1.5rem;
+}
+
+h2 {
+    margin-top: 0;
+    color: #333;
+}
+
+#results {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 500px;
+    overflow-y: auto;
+}

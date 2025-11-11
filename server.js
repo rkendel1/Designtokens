@@ -15,6 +15,7 @@ const cache = new NodeCache({ stdTTL: config.cache.ttl });
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 // Rate limiting
 const limiter = rateLimit({
