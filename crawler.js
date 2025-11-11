@@ -215,7 +215,8 @@ class Crawler {
       const elementsWithClasses = Array.from(document.querySelectorAll('[class]'));
       
       elementsWithClasses.forEach(el => {
-        const classList = el.className.split(/\s+/);
+        const classString = (typeof el.className === 'string') ? el.className : (el.className.baseVal || '');
+        const classList = classString.split(/\s+/);
         const computed = getComputedStyle(el);
         
         classList.forEach(className => {
