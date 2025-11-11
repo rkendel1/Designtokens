@@ -87,7 +87,7 @@ app.post('/api/crawl', async (req, res) => {
     });
 
     // --- AI Enrichment (Optional) ---
-    let normalizedTokens, brandVoiceAnalysis, embedding, companyMetadata;
+    let normalizedTokens, brandVoiceAnalysis, embedding, companyMetadata, brandKit;
 
     if (isLlmConfigured) {
       normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50));
@@ -96,12 +96,14 @@ app.post('/api/crawl', async (req, res) => {
       const embeddingVector = await llm.generateEmbedding(brandVoiceText);
       embedding = `[${embeddingVector.join(',')}]`;
       companyMetadata = await llm.extractCompanyMetadata(crawlData.html, crawlData.structuredData);
+      brandKit = await llm.generateBrandKit(designTokens, companyMetadata);
     } else {
       console.log('OpenAI API key not configured. Skipping LLM enrichment.');
       normalizedTokens = designTokens.map(t => ({ ...t, normalizedKey: t.tokenKey, category: t.tokenType, value: t.tokenValue, description: 'Raw token' }));
       brandVoiceAnalysis = { tone: 'N/A', personality: 'N/A', themes: [], guidelines: {} };
       embedding = null;
-      companyMetadata = { companyName: 'N/A', description: 'N/A' };
+      companyMetadata = { companyName: crawlData.meta.title || 'N/A', description: 'N/A' };
+      brandKit = null;
     }
 
     // --- Database Operations ---
@@ -124,8 +126,9 @@ app.post('/api/crawl', async (req, res) => {
 
     // --- Prepare Response ---
     const response = {
-      site: { id: site.id, url: site.url, domain: site.domain, title: site.title, description: site.description },
+      site: { id: site.id, url: site.url, domain: site.domain, title: site.title, description: site.description, logoUrl: crawlData.logoUrl, faviconUrl: crawlData.faviconUrl },
       companyInfo: { name: companyInfo.company_name, emails: companyInfo.contact_emails, phones: companyInfo.contact_phones, socialLinks: companyInfo.structured_json?.socialLinks || [] },
+      brandKit,
       designTokens: storedTokens.slice(0, 20),
       brandVoice: { tone: brandVoiceAnalysis.tone, personality: brandVoiceAnalysis.personality, themes: brandVoiceAnalysis.themes },
       stats: { totalTokens: storedTokens.length, totalProducts: crawlData.structuredData.products.length, crawledAt: site.crawled_at }

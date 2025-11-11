@@ -586,6 +586,58 @@ class Crawler {
     }
   }
 
+  // Extract logo and favicon
+  async extractLogoAndFavicon(page, baseUrl) {
+    return await page.evaluate((baseUrl) => {
+      const toAbsolute = (url) => {
+        if (!url || url.startsWith('data:')) return null;
+        try {
+          return new URL(url, baseUrl).href;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      // Find logo
+      let logoUrl = null;
+      const logoSelectors = [
+        'img[src*="logo"]',
+        'img[alt*="logo" i]',
+        'a[class*="logo"] img',
+        '[class*="logo"] img',
+        'header img',
+        'svg[aria-label*="logo" i]',
+      ];
+      for (const selector of logoSelectors) {
+        const el = document.querySelector(selector);
+        if (el) {
+          logoUrl = toAbsolute(el.src || el.getAttribute('href'));
+          if (logoUrl) break;
+        }
+      }
+
+      // Find favicon
+      let faviconUrl = null;
+      const faviconSelectors = [
+        'link[rel="icon"]',
+        'link[rel="shortcut icon"]',
+        'link[rel="apple-touch-icon"]',
+      ];
+      for (const selector of faviconSelectors) {
+        const el = document.querySelector(selector);
+        if (el) {
+          faviconUrl = toAbsolute(el.href);
+          if (faviconUrl) break;
+        }
+      }
+      if (!faviconUrl) {
+        faviconUrl = toAbsolute('/favicon.ico');
+      }
+
+      return { logoUrl, faviconUrl };
+    }, baseUrl);
+  }
+
   // Extract structured data using Cheerio
   extractStructuredData(html) {
     const $ = cheerio.load(html);
@@ -631,12 +683,14 @@ class Crawler {
     // Social links
     const socialDomains = ['facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com', 
                           'youtube.com', 'github.com', 'tiktok.com', 'pinterest.com'];
+    const seenSocials = new Set();
     $('a').each((i, el) => {
       const href = $(el).attr('href');
       if (href) {
         socialDomains.forEach(domain => {
-          if (href.includes(domain)) {
+          if (href.includes(domain) && !seenSocials.has(href)) {
             data.socialLinks.push({ platform: domain.replace('.com', ''), url: href });
+            seenSocials.add(href);
           }
         });
       }
@@ -701,7 +755,7 @@ class Crawler {
 
     // Extract meta information
     const metaData = {
-      title: $('title').text().trim(),
+      title: ($('title').text() || '').split('|')[0].trim(),
       description: $('meta[name="description"]').attr('content') || '',
       keywords: $('meta[name="keywords"]').attr('content') || '',
       ogTitle: $('meta[property="og:title"]').attr('content') || '',
@@ -817,6 +871,7 @@ class Crawler {
         await this.handleLazyLoad(page);
         await page.waitForTimeout(1000);
         const html = await page.content();
+        const { logoUrl, faviconUrl } = await this.extractLogoAndFavicon(page, url);
         const cssData = await this.extractCSSVariables(page);
         const cssVariables = cssData.variables || {};
         const stylesheetRules = cssData.stylesheetRules || {};
@@ -975,6 +1030,8 @@ class Crawler {
           screenshot: screenshotBase64,
           browserUsed: this.browserType,
           captchaDetected: hasCaptcha,
+          logoUrl,
+          faviconUrl,
           mode: 'deep'
         });
       } catch (error) {

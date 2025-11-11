@@ -345,6 +345,41 @@ Return JSON with categorized colors:
       throw error;
     }
   }
+
+  // Generate a semantic Brand Kit from raw tokens
+  async generateBrandKit(designTokens, companyInfo) {
+    try {
+      const prompt = `Analyze the following design tokens and company information to create a semantic "Brand Kit". 
+Identify the most important, representative tokens for whitelabeling.
+
+Design Tokens:
+${JSON.stringify(designTokens, null, 2)}
+
+Company Info:
+${JSON.stringify(companyInfo, null, 2)}
+
+Return a structured JSON object for the Brand Kit with the following schema:
+{
+  "companyName": "string",
+  "colors": {
+    "primary": "string (hex or rgb)",
+    "secondary": "string (hex or rgb)",
+    "accent": "string (hex or rgb)",
+    "text": "string (hex or rgb)",
+    "background": "string (hex or rgb)"
+  },
+  "typography": {
+    "headingFont": "string (font-family)",
+    "bodyFont": "string (font-family)"
+  }
+}`;
+      const systemPrompt = 'You are a brand identity expert. Your task is to distill raw design tokens into a clean, semantic Brand Kit suitable for whitelabeling applications.';
+      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
+    } catch (error) {
+      console.error('Error generating Brand Kit:', error);
+      return null;
+    }
+  }
 }
 
 module.exports = new LLMService();
