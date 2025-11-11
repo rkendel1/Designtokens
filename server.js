@@ -57,7 +57,7 @@ app.post('/api/crawl', async (req, res) => {
     }
 
     let site = await store.getSiteByUrl(url);
-    let crawlData = await crawler.crawl(url, { depth, takeScreenshot: true }) || {};
+    let crawlData = await crawler.crawlDeep(url, { depth, takeScreenshot: true }) || {};
 
     // Ensure safe defaults for crawl data
     crawlData.structuredData = crawlData.structuredData || {};
