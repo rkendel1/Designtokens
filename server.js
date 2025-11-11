@@ -11,6 +11,9 @@ const store = require('./store');
 const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
 
+// Check if LLM is configured
+const isLlmConfigured = config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here';
+
 // Middleware
 app.use(helmet());
 app.use(cors());
@@ -40,9 +43,8 @@ app.post('/api/crawl', async (req, res) => {
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
-    let parsedUrl;
     try {
-      parsedUrl = new URL(url);
+      new URL(url);
     } catch (e) {
       return res.status(400).json({ error: 'Invalid URL format' });
     }
@@ -54,152 +56,82 @@ app.post('/api/crawl', async (req, res) => {
       if (cached) return res.json({ ...cached, fromCache: true });
     }
 
-    // Check if site already exists in DB
     let site = await store.getSiteByUrl(url);
+    let crawlData = await crawler.crawl(url, { depth, takeScreenshot: true }) || {};
 
-    // Crawl the site and ensure safe defaults
-    let crawlData = {};
-    try {
-      crawlData = await crawler.crawl(url, { depth, takeScreenshot: true }) || {};
-    } catch (crawlError) {
-      console.error(`Crawler failed for ${url}:`, crawlError);
-      return res.status(500).json({
-        error: 'Failed to crawl site',
-        message: crawlError.message
-      });
-    }
-
+    // Ensure safe defaults for crawl data
     crawlData.structuredData = crawlData.structuredData || {};
     crawlData.cssVariables = crawlData.cssVariables || {};
     crawlData.computedStyles = crawlData.computedStyles || {};
     crawlData.meta = crawlData.meta || {};
-    crawlData.textContent = typeof crawlData.textContent === 'string' ? crawlData.textContent : "";
-    crawlData.structuredData.products = Array.isArray(crawlData.structuredData.products) ? crawlData.structuredData.products : [];
-    crawlData.structuredData.emails = Array.isArray(crawlData.structuredData.emails) ? crawlData.structuredData.emails : [];
-    crawlData.structuredData.phones = Array.isArray(crawlData.structuredData.phones) ? crawlData.structuredData.phones : [];
-    crawlData.structuredData.addresses = Array.isArray(crawlData.structuredData.addresses) ? crawlData.structuredData.addresses : [];
-    crawlData.structuredData.socialLinks = Array.isArray(crawlData.structuredData.socialLinks) ? crawlData.structuredData.socialLinks : [];
+    crawlData.textContent = crawlData.textContent || "";
+    crawlData.structuredData.products = crawlData.structuredData.products || [];
+    crawlData.structuredData.emails = crawlData.structuredData.emails || [];
+    crawlData.structuredData.phones = crawlData.structuredData.phones || [];
+    crawlData.structuredData.addresses = crawlData.structuredData.addresses || [];
+    crawlData.structuredData.socialLinks = crawlData.structuredData.socialLinks || [];
 
-    // Extract design tokens
+    // Extract raw design tokens
     const designTokens = [];
-
     Object.entries(crawlData.cssVariables).forEach(([key, value]) => {
       designTokens.push({ tokenKey: key, tokenType: 'css-variable', tokenValue: value, source: 'css' });
     });
-
-    const majorColors = crawler.extractMajorColors(crawlData.computedStyles);
-    majorColors.forEach((color, index) => {
-      designTokens.push({ tokenKey: `color-${index + 1}`, tokenType: 'color', tokenValue: color, source: 'computed' });
+    crawler.extractMajorColors(crawlData.computedStyles).forEach((color, i) => {
+      designTokens.push({ tokenKey: `color-${i + 1}`, tokenType: 'color', tokenValue: color, source: 'computed' });
+    });
+    crawler.extractMajorFonts(crawlData.computedStyles).forEach((font, i) => {
+      designTokens.push({ tokenKey: `font-family-${i + 1}`, tokenType: 'typography', tokenValue: font, source: 'computed' });
+    });
+    crawler.extractSpacingScale(crawlData.computedStyles).forEach((spacing, i) => {
+      designTokens.push({ tokenKey: `spacing-${i + 1}`, tokenType: 'spacing', tokenValue: spacing, source: 'computed' });
     });
 
-    const majorFonts = crawler.extractMajorFonts(crawlData.computedStyles);
-    majorFonts.forEach((font, index) => {
-      designTokens.push({ tokenKey: `font-family-${index + 1}`, tokenType: 'typography', tokenValue: font, source: 'computed' });
-    });
+    // --- AI Enrichment (Optional) ---
+    let normalizedTokens, brandVoiceAnalysis, embedding, companyMetadata;
 
-    const spacingScale = crawler.extractSpacingScale(crawlData.computedStyles);
-    spacingScale.forEach((spacing, index) => {
-      designTokens.push({ tokenKey: `spacing-${index + 1}`, tokenType: 'spacing', tokenValue: spacing, source: 'computed' });
-    });
-
-    // Normalize design tokens via LLM
-    const normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50));
-
-    // Analyze brand voice safely
-    const brandVoiceAnalysis = await llm.summarizeBrandVoice(crawlData.textContent || "");
-    const brandVoiceText = `${brandVoiceAnalysis.tone} ${brandVoiceAnalysis.personality} ${JSON.stringify(brandVoiceAnalysis.themes)}`;
-    const embedding = await llm.generateEmbedding(brandVoiceText);
-    // Extract company metadata
-    const companyMetadata = await llm.extractCompanyMetadata(crawlData.html, crawlData.structuredData);
-
-    // Store site in DB
-    if (!site) {
-      site = await store.createSite({
-        url: crawlData.url,
-        domain: crawlData.domain,
-        title: crawlData.meta.title,
-        description: crawlData.meta.description || companyMetadata.description,
-        rawHtml: crawlData.html,
-        screenshot: crawlData.screenshot
-      });
+    if (isLlmConfigured) {
+      normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50));
+      brandVoiceAnalysis = await llm.summarizeBrandVoice(crawlData.textContent);
+      const brandVoiceText = `${brandVoiceAnalysis.tone} ${brandVoiceAnalysis.personality}`;
+      const embeddingVector = await llm.generateEmbedding(brandVoiceText);
+      embedding = `[${embeddingVector.join(',')}]`;
+      companyMetadata = await llm.extractCompanyMetadata(crawlData.html, crawlData.structuredData);
     } else {
-      site = await store.updateSite(site.id, {
-        title: crawlData.meta.title,
-        description: crawlData.meta.description || companyMetadata.description,
-        rawHtml: crawlData.html,
-        screenshot: crawlData.screenshot
-      });
+      console.log('OpenAI API key not configured. Skipping LLM enrichment.');
+      normalizedTokens = designTokens.map(t => ({ ...t, normalizedKey: t.tokenKey, category: t.tokenType, value: t.tokenValue, description: 'Raw token' }));
+      brandVoiceAnalysis = { tone: 'N/A', personality: 'N/A', themes: [], guidelines: {} };
+      embedding = null;
+      companyMetadata = { companyName: 'N/A', description: 'N/A' };
     }
 
-    // Store company info
-    const companyInfo = await store.createCompanyInfo({
-      siteId: site.id,
-      companyName: companyMetadata.companyName,
-      legalName: companyMetadata.legalName,
-      contactEmails: crawlData.structuredData.emails,
-      contactPhones: crawlData.structuredData.phones,
-      addresses: crawlData.structuredData.addresses,
-      structuredJson: {
-        socialLinks: crawlData.structuredData.socialLinks,
-        industry: companyMetadata.industry,
-        ...companyMetadata.metadata
-      }
-    });
+    // --- Database Operations ---
+    if (!site) {
+      site = await store.createSite({ url: crawlData.url, domain: crawlData.domain, title: crawlData.meta.title, description: crawlData.meta.description || companyMetadata.description, rawHtml: crawlData.html, screenshot: crawlData.screenshot });
+    } else {
+      site = await store.updateSite(site.id, { title: crawlData.meta.title, description: crawlData.meta.description || companyMetadata.description, rawHtml: crawlData.html, screenshot: crawlData.screenshot });
+    }
 
-    // Store design tokens
-    const tokensToStore = normalizedTokens.map(token => ({
-      siteId: site.id,
-      tokenKey: token.normalizedKey || token.originalKey,
-      tokenType: token.category,
-      tokenValue: token.value,
-      source: 'normalized',
-      meta: { originalKey: token.originalKey, description: token.description }
-    }));
+    const companyInfo = await store.createCompanyInfo({ siteId: site.id, companyName: companyMetadata.companyName, legalName: companyMetadata.legalName, contactEmails: crawlData.structuredData.emails, contactPhones: crawlData.structuredData.phones, addresses: crawlData.structuredData.addresses, structuredJson: { socialLinks: crawlData.structuredData.socialLinks, industry: companyMetadata.industry, ...companyMetadata.metadata } });
+    
+    const tokensToStore = normalizedTokens.map(t => ({ siteId: site.id, tokenKey: t.normalizedKey, tokenType: t.category, tokenValue: t.value, source: isLlmConfigured ? 'normalized' : t.source, meta: { originalKey: t.originalKey || t.tokenKey, description: t.description } }));
     const storedTokens = await store.createDesignTokensBulk(tokensToStore);
 
-    // Store products
     if (crawlData.structuredData.products.length > 0) {
-      const productsToStore = crawlData.structuredData.products.map(product => ({
-        siteId: site.id,
-        name: product.name,
-        slug: product.name.toLowerCase().replace(/\s+/g, '-'),
-        price: product.price,
-        description: null,
-        productUrl: product.url,
-        metadata: {}
-      }));
-      await store.createProductsBulk(productsToStore);
+      await store.createProductsBulk(crawlData.structuredData.products.map(p => ({ siteId: site.id, name: p.name, slug: p.name.toLowerCase().replace(/\s+/g, '-'), price: p.price, productUrl: p.url })));
     }
 
-    // Store brand voice
-    await store.createBrandVoice({
-      siteId: site.id,
-      summary: JSON.stringify(brandVoiceAnalysis),
-      guidelines: brandVoiceAnalysis.guidelines || {},
-      embedding: `[${embedding.join(',')}]`
-    });
+    await store.createBrandVoice({ siteId: site.id, summary: JSON.stringify(brandVoiceAnalysis), guidelines: brandVoiceAnalysis.guidelines, embedding });
 
-    // Prepare response
+    // --- Prepare Response ---
     const response = {
       site: { id: site.id, url: site.url, domain: site.domain, title: site.title, description: site.description },
-      companyInfo: {
-        name: companyInfo.company_name,
-        emails: companyInfo.contact_emails,
-        phones: companyInfo.contact_phones,
-        socialLinks: companyInfo.structured_json?.socialLinks || []
-      },
+      companyInfo: { name: companyInfo.company_name, emails: companyInfo.contact_emails, phones: companyInfo.contact_phones, socialLinks: companyInfo.structured_json?.socialLinks || [] },
       designTokens: storedTokens.slice(0, 20),
       brandVoice: { tone: brandVoiceAnalysis.tone, personality: brandVoiceAnalysis.personality, themes: brandVoiceAnalysis.themes },
-      stats: {
-        totalTokens: storedTokens.length,
-        totalProducts: crawlData.structuredData.products.length,
-        crawledAt: site.crawled_at
-      }
+      stats: { totalTokens: storedTokens.length, totalProducts: crawlData.structuredData.products.length, crawledAt: site.crawled_at }
     };
 
-    // Cache the response
     cache.set(cacheKey, response);
-
     res.json(response);
 
   } catch (error) {
