@@ -4,7 +4,7 @@ const config = require('./config');
 
 // Initialize OpenAI client only if API key is available
 let openai = null;
-if (config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here') {
+if (config.openai.apiKey && config.openai.apiKey.startsWith('sk-')) {
   openai = new OpenAI({
     apiKey: config.openai.apiKey
   });

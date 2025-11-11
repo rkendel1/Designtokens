@@ -3,6 +3,7 @@ const cheerio = require('cheerio');
 const robotsParser = require('robots-parser');
 const axios = require('axios');
 const config = require('./config');
+const llm = require('./llm');
 const ColorThief = require('colorthief'); // For screenshot-based color extraction
 const fs = require('fs');
 const os = require('os');
@@ -33,6 +34,7 @@ class Crawler {
     this.browser = null;
     this.browserType = null;
     this.userAgentIndex = 0;
+    this.llm = llm;
   }
 
   // Get random user agent

@@ -12,7 +12,7 @@ const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
 
 // Check if LLM is configured
-const isLlmConfigured = config.openai.apiKey && config.openai.apiKey !== 'your_openai_api_key_here';
+const isLlmConfigured = config.openai.apiKey && config.openai.apiKey.startsWith('sk-');
 
 // Middleware
 app.use(helmet());
