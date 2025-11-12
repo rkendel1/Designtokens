@@ -360,12 +360,12 @@ You are a world-class design systems expert. Your task is to analyze the followi
     - URL: ${crawlData.url}
 
 2.  **Raw Design Tokens:**
-    - Colors: ${JSON.stringify(crawlData.designTokens.colors.slice(0, 20))}
-    - Font Families: ${JSON.stringify(crawlData.designTokens.fonts)}
-    - Font Sizes: ${JSON.stringify(crawlData.designTokens.fontSizes)}
-    - Spacing: ${JSON.stringify(crawlData.designTokens.spacing)}
-    - Border Radius: ${JSON.stringify(crawlData.designTokens.borderRadius)}
-    - Shadows: ${JSON.stringify(crawlData.designTokens.shadows)}
+    - Colors: ${JSON.stringify((crawlData.designTokens.colors || []).slice(0, 20))}
+    - Font Families: ${JSON.stringify((crawlData.designTokens.fonts || []).slice(0, 10))}
+    - Font Sizes: ${JSON.stringify((crawlData.designTokens.fontSizes || []).slice(0, 20))}
+    - Spacing: ${JSON.stringify((crawlData.designTokens.spacing || []).slice(0, 20))}
+    - Border Radius: ${JSON.stringify((crawlData.designTokens.borderRadius || []).slice(0, 10))}
+    - Shadows: ${JSON.stringify((crawlData.designTokens.shadows || []).slice(0, 10))}
 
 3.  **Raw CSS Variables:**
     \`\`\`css
