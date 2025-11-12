@@ -8,6 +8,7 @@ const crawler = require('./crawler');
 const llm = require('./llm');
 const store = require('./store');
 const { resizeLogo } = require('./image-processor');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
@@ -57,8 +58,8 @@ app.post('/api/crawl', async (req, res) => {
       if (cached) return res.json({ ...cached, fromCache: true });
     }
 
-    let site = await store.getSiteByUrl(url);
-    let crawlData = await crawler.crawlDeep(url, { depth, takeScreenshot: true }) || {};
+    // --- Crawl and Extract Raw Data ---
+    const crawlData = await crawler.crawlDeep(url, { depth, takeScreenshot: true }) || {};
 
     // Ensure safe defaults for crawl data
     crawlData.structuredData = crawlData.structuredData || {};
@@ -66,101 +67,35 @@ app.post('/api/crawl', async (req, res) => {
     crawlData.computedStyles = crawlData.computedStyles || {};
     crawlData.meta = crawlData.meta || {};
     crawlData.textContent = crawlData.textContent || "";
-    crawlData.structuredData.products = crawlData.structuredData.products || [];
-    crawlData.structuredData.emails = crawlData.structuredData.emails || [];
-    crawlData.structuredData.phones = crawlData.structuredData.phones || [];
-    crawlData.structuredData.addresses = crawlData.structuredData.addresses || [];
-    crawlData.structuredData.socialLinks = crawlData.structuredData.socialLinks || [];
 
-    // Extract raw design tokens
-    const designTokens = [];
-    Object.entries(crawlData.cssVariables).forEach(([key, value]) => {
-      designTokens.push({ tokenKey: key, tokenType: 'css-variable', tokenValue: value, source: 'css' });
-    });
-    crawler.extractMajorColors(crawlData.computedStyles).forEach((color, i) => {
-      designTokens.push({ tokenKey: `color-${i + 1}`, tokenType: 'color', tokenValue: color, source: 'computed' });
-    });
-    crawler.extractMajorFonts(crawlData.computedStyles).forEach((font, i) => {
-      designTokens.push({ tokenKey: `font-family-${i + 1}`, tokenType: 'typography', tokenValue: font, source: 'computed' });
-    });
-    crawler.extractSpacingScale(crawlData.computedStyles).forEach((spacing, i) => {
-      designTokens.push({ tokenKey: `spacing-${i + 1}`, tokenType: 'spacing', tokenValue: spacing, source: 'computed' });
-    });
-
-    // --- AI Enrichment (Optional) ---
-    let normalizedTokens, brandVoiceAnalysis, embedding, companyMetadata, brandKit, figmaTokens;
-
-    if (isLlmConfigured) {
-      normalizedTokens = await llm.normalizeDesignTokens(designTokens.slice(0, 50));
-      brandVoiceAnalysis = await llm.summarizeBrandVoice(crawlData.textContent);
-      const brandVoiceText = `${brandVoiceAnalysis.tone} ${brandVoiceAnalysis.personality}`;
-      const embeddingVector = await llm.generateEmbedding(brandVoiceText);
-      embedding = `[${embeddingVector.join(',')}]`;
-      companyMetadata = await llm.extractCompanyMetadata(crawlData.html, crawlData.structuredData);
-      brandKit = await llm.generateBrandKit(designTokens, companyMetadata);
-      figmaTokens = await llm.mapToFigmaTokens(designTokens);
-    } else {
-      console.log('OpenAI API key not configured. Skipping LLM enrichment.');
-      normalizedTokens = designTokens.map(t => ({ ...t, normalizedKey: t.tokenKey, category: t.tokenType, value: t.tokenValue, description: 'Raw token' }));
-      brandVoiceAnalysis = { tone: 'N/A', personality: 'N/A', themes: [], guidelines: {} };
-      embedding = null;
-      companyMetadata = { companyName: crawlData.meta.title || 'N/A', description: 'N/A' };
-      brandKit = null;
-      figmaTokens = null;
+    // --- AI Synthesis ---
+    if (!isLlmConfigured) {
+      return res.status(400).json({ error: 'LLM is not configured. Cannot generate semantic brand kit.' });
     }
 
-    // --- Image Processing ---
-    const resizedLogos = await resizeLogo(crawlData.logoUrl);
+    const semanticBrandKit = await llm.generateSemanticBrandKit(crawlData);
 
-    // --- Database Operations ---
-    if (!site) {
-      site = await store.createSite({ url: crawlData.url, domain: crawlData.domain, title: crawlData.meta.title, description: crawlData.meta.description || companyMetadata.description, rawHtml: crawlData.html, screenshot: crawlData.screenshot });
-    } else {
-      site = await store.updateSite(site.id, { title: crawlData.meta.title, description: crawlData.meta.description || companyMetadata.description, rawHtml: crawlData.html, screenshot: crawlData.screenshot });
+    if (!semanticBrandKit) {
+      return res.status(500).json({ error: 'Failed to generate brand kit from LLM.' });
     }
 
-    const companyInfo = await store.createCompanyInfo({ siteId: site.id, companyName: companyMetadata.companyName, legalName: companyMetadata.legalName, contactEmails: crawlData.structuredData.emails, contactPhones: crawlData.structuredData.phones, addresses: crawlData.structuredData.addresses, structuredJson: { socialLinks: crawlData.structuredData.socialLinks, industry: companyMetadata.industry, ...companyMetadata.metadata } });
-    
-    const tokensToStore = normalizedTokens.map(t => ({ siteId: site.id, tokenKey: t.normalizedKey, tokenType: t.category, tokenValue: t.value, source: isLlmConfigured ? 'normalized' : t.source, meta: { originalKey: t.originalKey || t.tokenKey, description: t.description } }));
-    const storedTokens = await store.createDesignTokensBulk(tokensToStore);
-
-    if (crawlData.structuredData.products.length > 0) {
-      await store.createProductsBulk(crawlData.structuredData.products.map(p => ({ siteId: site.id, name: p.name, slug: p.name.toLowerCase().replace(/\s+/g, '-'), price: p.price, productUrl: p.url })));
-    }
-
-    await store.createBrandVoice({ siteId: site.id, summary: JSON.stringify(brandVoiceAnalysis), guidelines: brandVoiceAnalysis.guidelines, embedding });
-
-    // --- Prepare Response ---
-    const response = {
-      site: { 
-        id: site.id, 
-        url: site.url, 
-        domain: site.domain, 
-        title: site.title, 
-        description: site.description,
-        favicon: crawlData.faviconUrl,
-        ogImage: crawlData.meta.ogImage
+    // --- Finalize and Respond ---
+    const brandId = uuidv4();
+    const finalResponse = {
+      ...semanticBrandKit,
+      brandId: brandId,
+      url: crawlData.url,
+      logo: {
+        ...semanticBrandKit.logo,
+        url: crawlData.logoUrl // Ensure we use the direct URL
       },
-      companyInfo: { 
-        name: companyInfo.company_name, 
-        emails: companyInfo.contact_emails, 
-        phones: companyInfo.contact_phones, 
-        socialLinks: companyInfo.structured_json?.socialLinks || [],
-        logoUrl: crawlData.logoUrl,
-        resizedLogos: resizedLogos
-      },
-      images: {
-        hero: crawlData.heroImageUrl
-      },
-      brandKit,
-      figmaTokens,
-      designTokens: storedTokens.slice(0, 20),
-      brandVoice: { tone: brandVoiceAnalysis.tone, personality: brandVoiceAnalysis.personality, themes: brandVoiceAnalysis.themes },
-      stats: { totalTokens: storedTokens.length, totalProducts: crawlData.structuredData.products.length, crawledAt: site.crawled_at }
+      generatedAt: new Date().toISOString(),
+      pdfKitUrl: `https://your-supabase.supabase.co/storage/v1/object/public/brand-kits/${brandId}.pdf`, // Placeholder
+      status: "ready"
     };
 
-    cache.set(cacheKey, response);
-    res.json(response);
+    cache.set(cacheKey, finalResponse);
+    res.json(finalResponse);
 
   } catch (error) {
     console.error('Crawl error:', error);

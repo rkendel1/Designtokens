@@ -1,6 +1,7 @@
 const OpenAI = require('openai');
 const axios = require('axios');
 const config = require('./config');
+const { v4: uuidv4 } = require('uuid');
 
 // Initialize OpenAI client only if API key is available
 let openai = null;
@@ -286,7 +287,7 @@ Provide canonical company metadata in JSON format:
       const systemPrompt = 'You are an expert at extracting and normalizing company information from web data.';
 
       return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
-    } catch (error) {
+    } catch (error)
       console.error('Error extracting company metadata:', error);
       throw error;
     }
@@ -346,72 +347,105 @@ Return JSON with categorized colors:
     }
   }
 
-  // Generate a semantic Brand Kit from raw tokens
-  async generateBrandKit(designTokens, companyInfo) {
+  async generateSemanticBrandKit(crawlData) {
     try {
-      const prompt = `Analyze the following design tokens and company information to create a semantic "Brand Kit". 
-Identify the most important, representative tokens for whitelabeling.
+      const prompt = `
+You are a world-class design systems expert. Your task is to analyze the following raw website data and generate a comprehensive, semantic brand kit in a specific JSON format.
 
-Design Tokens:
-${JSON.stringify(designTokens, null, 2)}
+**RAW WEBSITE DATA:**
 
-Company Info:
-${JSON.stringify(companyInfo, null, 2)}
+1.  **Company Info:**
+    - Name: ${crawlData.meta.title}
+    - Description: ${crawlData.meta.description}
+    - URL: ${crawlData.url}
 
-Return a structured JSON object for the Brand Kit with the following schema:
-{
-  "companyName": "string",
-  "colors": {
-    "primary": "string (hex or rgb)",
-    "secondary": "string (hex or rgb)",
-    "accent": "string (hex or rgb)",
-    "text": "string (hex or rgb)",
-    "background": "string (hex or rgb)"
-  },
-  "typography": {
-    "headingFont": "string (font-family)",
-    "bodyFont": "string (font-family)"
-  }
-}`;
-      const systemPrompt = 'You are a brand identity expert. Your task is to distill raw design tokens into a clean, semantic Brand Kit suitable for whitelabeling applications.';
-      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
-    } catch (error) {
-      console.error('Error generating Brand Kit:', error);
-      return null;
+2.  **Raw Design Tokens:**
+    - Colors: ${JSON.stringify(crawlData.designTokens.colors.slice(0, 20))}
+    - Font Families: ${JSON.stringify(crawlData.designTokens.fonts)}
+    - Font Sizes: ${JSON.stringify(crawlData.designTokens.fontSizes)}
+    - Spacing: ${JSON.stringify(crawlData.designTokens.spacing)}
+    - Border Radius: ${JSON.stringify(crawlData.designTokens.borderRadius)}
+    - Shadows: ${JSON.stringify(crawlData.designTokens.shadows)}
+
+3.  **Raw CSS Variables:**
+    \`\`\`css
+    :root {
+      ${Object.entries(crawlData.cssVariables).map(([key, value]) => `${key}: ${value};`).join('\n      ')}
     }
-  }
+    \`\`\`
 
-  async mapToFigmaTokens(designTokens) {
-    try {
-      const prompt = `Analyze the following raw design tokens and map them to a structured, semantic, Figma-like format.
-- Identify primary, secondary, and neutral color palettes. Use shades where possible (e.g., 100, 500, 900).
-- Identify heading and body typography.
-- Identify a logical spacing scale (e.g., sm, md, lg).
+4.  **Brand Voice Analysis (Initial):**
+    - Content Snippet: ${crawlData.textContent.substring(0, 1500)}
 
-Raw Tokens:
-${JSON.stringify(designTokens.slice(0, 100), null, 2)}
+5.  **HTML Snippet (for component analysis):**
+    \`\`\`html
+    ${crawlData.html.substring(0, 3000)}
+    \`\`\`
 
-Return a structured JSON object with the following schema:
+**YOUR TASK:**
+
+Synthesize all the raw data above into a single, structured JSON object that follows this exact schema. Use your expertise to infer semantic meaning (e.g., which color is 'primary', which font size is 'lg').
+
+**TARGET JSON SCHEMA:**
+\`\`\`json
 {
+  "brandId": "string",
+  "url": "string",
+  "name": "string",
+  "tagline": "string",
+  "logo": {
+    "url": "string",
+    "width": "number",
+    "height": "number",
+    "alt": "string"
+  },
   "colors": {
-    "primary": { "500": "#hex", "600": "#hex" },
-    "secondary": { "500": "#hex" },
-    "neutral": { "100": "#hex", "900": "#hex" }
+    "primary": "string",
+    "secondary": "string",
+    "accent": "string",
+    "background": "string",
+    "surface": "string",
+    "success": "string",
+    "warning": "string",
+    "error": "string",
+    "text": {
+      "primary": "string",
+      "secondary": "string",
+      "muted": "string",
+      "onPrimary": "string"
+    }
   },
   "typography": {
-    "heading": { "fontFamily": "string", "fontWeight": "number" },
-    "body": { "fontFamily": "string", "fontWeight": "number" }
+    "fontFamily": { "heading": "string", "body": "string" },
+    "fontWeight": { "regular": 400, "medium": 500, "semibold": 600, "bold": 700 },
+    "fontSize": { "xs": "string", "sm": "string", "base": "string", "lg": "string", "xl": "string", "2xl": "string" },
+    "lineHeight": { "tight": 1.25, "normal": 1.5, "relaxed": 1.75 }
   },
-  "spacing": {
-    "base": "1rem",
-    "sm": "0.5rem",
-    "lg": "2rem"
-  }
-}`;
-      const systemPrompt = 'You are a design systems expert. Your task is to convert a flat list of design tokens into a structured, semantic format suitable for tools like Figma.';
+  "spacing": { "4": "1rem", "8": "2rem" },
+  "radius": { "default": "0.25rem", "lg": "0.5rem", "full": "9999px" },
+  "shadows": { "default": "string", "md": "string", "lg": "string" },
+  "voice": {
+    "tone": "string",
+    "personality": "string",
+    "keyPhrases": ["string"],
+    "writingStyle": { "sentenceLength": "string", "activeVoice": "boolean", "jargonLevel": "string", "ctaStyle": "string" },
+    "examples": { "headline": "string", "subheadline": "string", "cta": "string" }
+  },
+  "components": {
+    "button": { "base": "string", "variants": { "primary": "string" }, "sizes": { "md": "string" } },
+    "card": { "base": "string" }
+  },
+  "cssVariables": "string",
+  "generatedAt": "string",
+  "pdfKitUrl": "string",
+  "status": "string"
+}
+\`\`\`
+`;
+      const systemPrompt = 'You are a world-class design systems expert. Your task is to analyze raw website data and generate a comprehensive, semantic brand kit in a specific JSON format.';
       return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
     } catch (error) {
-      console.error('Error mapping to Figma tokens:', error);
+      console.error('Error generating semantic brand kit:', error);
       return null;
     }
   }
