@@ -1,4 +1,5 @@
-require('dotenv').config(); // Load environment variables first
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') }); // Load environment variables first
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
