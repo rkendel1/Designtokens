@@ -1,6 +1,10 @@
 const supabase = require('./supabase-client');
 const llm = require('./llm');
 
+if (!supabase) {
+  throw new Error("Supabase client failed to initialize. Check your .env file and SUPABASE_URL/SUPABASE_ANON_KEY variables.");
+}
+
 class Store {
   // --- Site Operations ---
   async getSiteByUrl(url) {
