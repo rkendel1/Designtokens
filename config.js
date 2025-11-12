@@ -1,11 +1,4 @@
-const dotenv = require('dotenv');
-const path = require('path');
-
-// Load .env.local first to give it priority over .env
-dotenv.config({ path: path.resolve(__dirname, '.env.local') });
-
-// Load .env (will not override any variables already set from .env.local)
-dotenv.config();
+// Environment variables are now loaded by server.js or init-db.js
 
 module.exports = {
   port: process.env.PORT || 3000,

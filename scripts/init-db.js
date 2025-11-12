@@ -1,10 +1,7 @@
+require('./load-env.js'); // Load environment variables first
 const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');
-
-// Load environment variables from .env and .env.local
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env.local'), override: true });
 
 async function initializeDatabase() {
   const connectionString = process.env.DATABASE_URL;
