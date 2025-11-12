@@ -47,10 +47,22 @@ class Store {
 
   async createProductsBulk(siteId, products) {
     if (!products || products.length === 0) return null;
-    const productsWithSiteId = products.map(product => ({ site_id: siteId, ...product }));
+    
+    // Map the product data to the correct database schema
+    const productsToInsert = products.map(product => ({
+      site_id: siteId,
+      name: product.name,
+      slug: product.slug || null,
+      price: product.price || (product.offers ? (product.offers.price || (product.offers[0] && product.offers[0].price)) : null),
+      description: product.description,
+      product_url: product.url || product.link || product.product_url, // Map url/link to product_url
+      metadata: product // Store the original object in metadata
+    }));
+
     const { data, error } = await supabase
       .from('products')
-      .insert(productsWithSiteId);
+      .insert(productsToInsert);
+      
     if (error) throw error;
     return data;
   }
