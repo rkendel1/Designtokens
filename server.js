@@ -7,6 +7,7 @@ const config = require('./config');
 const crawler = require('./crawler');
 const llm = require('./llm');
 const store = require('./store');
+const { resizeLogo } = require('./image-processor');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
@@ -108,6 +109,9 @@ app.post('/api/crawl', async (req, res) => {
       figmaTokens = null;
     }
 
+    // --- Image Processing ---
+    const resizedLogos = await resizeLogo(crawlData.logoUrl);
+
     // --- Database Operations ---
     if (!site) {
       site = await store.createSite({ url: crawlData.url, domain: crawlData.domain, title: crawlData.meta.title, description: crawlData.meta.description || companyMetadata.description, rawHtml: crawlData.html, screenshot: crawlData.screenshot });
@@ -128,8 +132,26 @@ app.post('/api/crawl', async (req, res) => {
 
     // --- Prepare Response ---
     const response = {
-      site: { id: site.id, url: site.url, domain: site.domain, title: site.title, description: site.description, logoUrl: crawlData.logoUrl, faviconUrl: crawlData.faviconUrl },
-      companyInfo: { name: companyInfo.company_name, emails: companyInfo.contact_emails, phones: companyInfo.contact_phones, socialLinks: companyInfo.structured_json?.socialLinks || [] },
+      site: { 
+        id: site.id, 
+        url: site.url, 
+        domain: site.domain, 
+        title: site.title, 
+        description: site.description,
+        favicon: crawlData.faviconUrl,
+        ogImage: crawlData.meta.ogImage
+      },
+      companyInfo: { 
+        name: companyInfo.company_name, 
+        emails: companyInfo.contact_emails, 
+        phones: companyInfo.contact_phones, 
+        socialLinks: companyInfo.structured_json?.socialLinks || [],
+        logoUrl: crawlData.logoUrl,
+        resizedLogos: resizedLogos
+      },
+      images: {
+        hero: crawlData.heroImageUrl
+      },
       brandKit,
       figmaTokens,
       designTokens: storedTokens.slice(0, 20),

@@ -638,6 +638,34 @@ class Crawler {
     }, baseUrl);
   }
 
+  // Extract hero image
+  async extractHeroImage(page, baseUrl) {
+    return await page.evaluate((baseUrl) => {
+      const toAbsolute = (url) => {
+        if (!url || url.startsWith('data:')) return null;
+        try {
+          return new URL(url, baseUrl).href;
+        } catch (e) {
+          return null;
+        }
+      };
+
+      const images = Array.from(document.querySelectorAll('main img, header img'));
+      let largestImage = null;
+      let maxArea = 0;
+
+      for (const img of images) {
+        const area = img.naturalWidth * img.naturalHeight;
+        if (area > maxArea) {
+          maxArea = area;
+          largestImage = img;
+        }
+      }
+
+      return largestImage ? toAbsolute(largestImage.src) : null;
+    }, baseUrl);
+  }
+
   // Extract structured data using Cheerio
   extractStructuredData(html) {
     const $ = cheerio.load(html);
@@ -877,6 +905,7 @@ class Crawler {
         await page.waitForTimeout(1000);
         const html = await page.content();
         const { logoUrl, faviconUrl } = await this.extractLogoAndFavicon(page, url);
+        const heroImageUrl = await this.extractHeroImage(page, url);
         const cssData = await this.extractCSSVariables(page);
         const cssVariables = cssData.variables || {};
         const stylesheetRules = cssData.stylesheetRules || {};
@@ -1037,6 +1066,7 @@ class Crawler {
           captchaDetected: hasCaptcha,
           logoUrl,
           faviconUrl,
+          heroImageUrl,
           mode: 'deep'
         });
       } finally {
