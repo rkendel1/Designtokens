@@ -7,8 +7,7 @@
     "start": "node scripts/setup-supabase.js && node server.js",
     "dev": "node scripts/setup-supabase.js && nodemon server.js",
     "test": "jest --coverage",
-    "test:watch": "jest --watch",
-    "init-db": "node scripts/init-db.js"
+    "test:watch": "jest --watch"
   },
   "keywords": [
     "design-tokens",
@@ -31,8 +30,6 @@
     "node-cache": "^5.1.2",
     "openai": "^4.20.1",
     "pdfkit": "^0.13.0",
-    "pg": "^8.11.3",
-    "pgvector": "^0.1.8",
     "playwright": "^1.40.1",
     "robots-parser": "^3.0.1",
     "sharp": "^0.34.5",

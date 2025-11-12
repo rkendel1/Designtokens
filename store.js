@@ -1,213 +1,130 @@
-const { Pool } = require('pg');
-const config = require('./config');
-
-const pool = new Pool({
-  connectionString: config.database.connectionString
-});
-
-// Test database connection
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-  process.exit(-1);
-});
+const supabase = require('./supabase-client');
+const llm = require('./llm');
 
 class Store {
-  // Site operations
-  async createSite(data) {
-    const { url, domain, title, description, rawHtml, screenshot } = data;
-    const query = `
-      INSERT INTO sites (url, domain, title, description, raw_html, screenshot)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `;
-    const values = [url, domain, title, description, rawHtml, screenshot];
-    const result = await pool.query(query, values);
-    return result.rows[0];
-  }
-
+  // --- Site Operations ---
   async getSiteByUrl(url) {
-    const query = 'SELECT * FROM sites WHERE url = $1';
-    const result = await pool.query(query, [url]);
-    return result.rows[0];
+    const { data, error } = await supabase
+      .from('sites')
+      .select('id')
+      .eq('url', url)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error; // Ignore "not found"
+    return data;
   }
 
-  async updateSite(id, data) {
-    const { title, description, rawHtml, screenshot } = data;
-    const query = `
-      UPDATE sites 
-      SET title = COALESCE($2, title),
-          description = COALESCE($3, description),
-          raw_html = COALESCE($4, raw_html),
-          screenshot = COALESCE($5, screenshot),
-          crawled_at = now()
-      WHERE id = $1
-      RETURNING *
-    `;
-    const values = [id, title, description, rawHtml, screenshot];
-    const result = await pool.query(query, values);
-    return result.rows[0];
+  async createSite(siteData) {
+    const { data, error } = await supabase
+      .from('sites')
+      .insert(siteData)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   }
 
-  // Company info operations
-  async createCompanyInfo(data) {
-    const { siteId, companyName, legalName, contactEmails, contactPhones, addresses, structuredJson } = data;
-    const query = `
-      INSERT INTO company_info (site_id, company_name, legal_name, contact_emails, contact_phones, addresses, structured_json)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `;
-    const values = [siteId, companyName, legalName, contactEmails, contactPhones, addresses, structuredJson];
-    const result = await pool.query(query, values);
-    return result.rows[0];
+  // --- Data Insertion Operations ---
+  async createCompanyInfo(siteId, companyData) {
+    const { data, error } = await supabase
+      .from('company_info')
+      .insert({ site_id: siteId, ...companyData });
+    if (error) throw error;
+    return data;
   }
 
-  async getCompanyInfoBySiteId(siteId) {
-    const query = 'SELECT * FROM company_info WHERE site_id = $1';
-    const result = await pool.query(query, [siteId]);
-    return result.rows[0];
+  async createDesignTokensBulk(siteId, tokens) {
+    const tokensWithSiteId = tokens.map(token => ({ site_id: siteId, ...token }));
+    const { data, error } = await supabase
+      .from('design_tokens')
+      .insert(tokensWithSiteId);
+    if (error) throw error;
+    return data;
   }
 
-  // Design tokens operations
-  async createDesignToken(data) {
-    const { siteId, tokenKey, tokenType, tokenValue, source, meta } = data;
-    const query = `
-      INSERT INTO design_tokens (site_id, token_key, token_type, token_value, source, meta)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `;
-    const values = [siteId, tokenKey, tokenType, tokenValue, source, meta];
-    const result = await pool.query(query, values);
-    return result.rows[0];
+  async createProductsBulk(siteId, products) {
+    if (!products || products.length === 0) return null;
+    const productsWithSiteId = products.map(product => ({ site_id: siteId, ...product }));
+    const { data, error } = await supabase
+      .from('products')
+      .insert(productsWithSiteId);
+    if (error) throw error;
+    return data;
   }
 
-  async createDesignTokensBulk(tokens) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const results = [];
-      for (const token of tokens) {
-        const query = `
-          INSERT INTO design_tokens (site_id, token_key, token_type, token_value, source, meta)
-          VALUES ($1, $2, $3, $4, $5, $6)
-          RETURNING *
-        `;
-        const values = [
-          token.siteId,
-          token.tokenKey,
-          token.tokenType,
-          token.tokenValue,
-          token.source,
-          token.meta
-        ];
-        const result = await client.query(query, values);
-        results.push(result.rows[0]);
+  async createBrandVoice(siteId, voiceData, textContent) {
+    // Generate embedding for the brand voice summary
+    const embedding = await llm.generateEmbedding(textContent);
+    const { data, error } = await supabase
+      .from('brand_voice')
+      .insert({
+        site_id: siteId,
+        summary: voiceData.summary,
+        guidelines: voiceData.guidelines,
+        embedding: embedding,
+      });
+    if (error) throw error;
+    return data;
+  }
+
+  // --- Orchestration ---
+  async saveCrawlResult(crawlData, semanticBrandKit) {
+    // 1. Create Site
+    const site = await this.createSite({
+      url: crawlData.url,
+      domain: crawlData.domain,
+      title: crawlData.meta.title,
+      description: crawlData.meta.description,
+      raw_html: crawlData.html,
+      screenshot: crawlData.screenshot,
+    });
+
+    const siteId = site.id;
+
+    // 2. Create Company Info
+    await this.createCompanyInfo(siteId, {
+      company_name: semanticBrandKit.name,
+      contact_emails: crawlData.structuredData.emails,
+      contact_phones: crawlData.structuredData.phones,
+      structured_json: crawlData.structuredData,
+    });
+
+    // 3. Transform and Create Design Tokens
+    const tokensToInsert = [];
+    const tokenCategories = ['colors', 'typography', 'spacing', 'radius', 'shadows'];
+    for (const category of tokenCategories) {
+      if (semanticBrandKit[category]) {
+        for (const [key, value] of Object.entries(semanticBrandKit[category])) {
+          if (typeof value === 'string') {
+            tokensToInsert.push({
+              token_key: key,
+              token_type: category,
+              token_value: value,
+              source: 'llm-normalized',
+            });
+          } else if (typeof value === 'object' && value !== null) {
+            for (const [subKey, subValue] of Object.entries(value)) {
+               tokensToInsert.push({
+                token_key: `${key}.${subKey}`,
+                token_type: category,
+                token_value: subValue.toString(),
+                source: 'llm-normalized',
+              });
+            }
+          }
+        }
       }
-      await client.query('COMMIT');
-      return results;
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
     }
-  }
+    await this.createDesignTokensBulk(siteId, tokensToInsert);
 
-  async getDesignTokensBySiteId(siteId) {
-    const query = 'SELECT * FROM design_tokens WHERE site_id = $1 ORDER BY token_type, token_key';
-    const result = await pool.query(query, [siteId]);
-    return result.rows;
-  }
+    // 4. Create Products
+    await this.createProductsBulk(siteId, crawlData.structuredData.products);
 
-  // Products operations
-  async createProduct(data) {
-    const { siteId, name, slug, price, description, productUrl, metadata } = data;
-    const query = `
-      INSERT INTO products (site_id, name, slug, price, description, product_url, metadata)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING *
-    `;
-    const values = [siteId, name, slug, price, description, productUrl, metadata];
-    const result = await pool.query(query, values);
-    return result.rows[0];
-  }
-
-  async createProductsBulk(products) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const results = [];
-      for (const product of products) {
-        const query = `
-          INSERT INTO products (site_id, name, slug, price, description, product_url, metadata)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-          RETURNING *
-        `;
-        const values = [
-          product.siteId,
-          product.name,
-          product.slug,
-          product.price,
-          product.description,
-          product.productUrl,
-          product.metadata
-        ];
-        const result = await client.query(query, values);
-        results.push(result.rows[0]);
-      }
-      await client.query('COMMIT');
-      return results;
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
+    // 5. Create Brand Voice
+    if (semanticBrandKit.voice) {
+      await this.createBrandVoice(siteId, semanticBrandKit.voice, crawlData.textContent);
     }
-  }
 
-  async getProductsBySiteId(siteId) {
-    const query = 'SELECT * FROM products WHERE site_id = $1';
-    const result = await pool.query(query, [siteId]);
-    return result.rows;
-  }
-
-  // Brand voice operations
-  async createBrandVoice(data) {
-    const { siteId, summary, guidelines, embedding } = data;
-    const query = `
-      INSERT INTO brand_voice (site_id, summary, guidelines, embedding)
-      VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `;
-    const values = [siteId, summary, guidelines, embedding];
-    const result = await pool.query(query, values);
-    return result.rows[0];
-  }
-
-  async getBrandVoiceBySiteId(siteId) {
-    const query = 'SELECT * FROM brand_voice WHERE site_id = $1';
-    const result = await pool.query(query, [siteId]);
-    return result.rows[0];
-  }
-
-  // Utility: Get complete site data
-  async getCompleteSiteData(siteId) {
-    const site = await pool.query('SELECT * FROM sites WHERE id = $1', [siteId]);
-    const companyInfo = await this.getCompanyInfoBySiteId(siteId);
-    const designTokens = await this.getDesignTokensBySiteId(siteId);
-    const products = await this.getProductsBySiteId(siteId);
-    const brandVoice = await this.getBrandVoiceBySiteId(siteId);
-
-    return {
-      site: site.rows[0],
-      companyInfo,
-      designTokens,
-      products,
-      brandVoice
-    };
-  }
-
-  async close() {
-    await pool.end();
+    return { siteId, ...semanticBrandKit };
   }
 }
 
