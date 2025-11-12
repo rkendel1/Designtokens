@@ -27,6 +27,14 @@ class Store {
     return data;
   }
 
+  async deleteSite(siteId) {
+    const { error } = await supabase
+      .from('sites')
+      .delete()
+      .eq('id', siteId);
+    if (error) throw error;
+  }
+
   // --- Data Insertion Operations ---
   async createCompanyInfo(siteId, companyData) {
     const { data, error } = await supabase
@@ -84,6 +92,12 @@ class Store {
 
   // --- Orchestration ---
   async saveCrawlResult(crawlData, semanticBrandKit) {
+    // Check for and delete existing site data to prevent unique constraint violation
+    const existingSite = await this.getSiteByUrl(crawlData.url);
+    if (existingSite) {
+      await this.deleteSite(existingSite.id);
+    }
+
     // 1. Create Site
     const site = await this.createSite({
       url: crawlData.url,
