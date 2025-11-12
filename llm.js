@@ -287,7 +287,7 @@ Provide canonical company metadata in JSON format:
       const systemPrompt = 'You are an expert at extracting and normalizing company information from web data.';
 
       return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
-    } catch (error)
+    } catch (error) {
       console.error('Error extracting company metadata:', error);
       throw error;
     }
