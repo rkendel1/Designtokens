@@ -1,6 +1,5 @@
 const axios = require('axios');
 const sharp = require('sharp');
-const { kmeans } = require('ml-kmeans');
 
 /**
  * Downloads an image from a URL and resizes it to standard icon sizes.
@@ -42,6 +41,8 @@ async function resizeLogo(imageUrl) {
  */
 async function extractColorPalette(imageBuffer, k = 8) {
   try {
+    const { kmeans } = await import('ml-kmeans');
+    
     const { data } = await sharp(imageBuffer)
       .raw()
       .ensureAlpha()

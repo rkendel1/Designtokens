@@ -660,10 +660,10 @@ class Crawler {
     // NOTE: A deep crawl is needed to capture JS-rendered content and emails/phones injected by JavaScript.
     // This function only extracts what is present in the static HTML.
 
-    // Email regex
-    const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi;
-    // Phone regex (simple, supports various formats)
-    const phoneRegex = /(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
+    // Improved Email regex
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi;
+    // Improved Phone regex
+    const phoneRegex = /\b(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g;
 
     // Extract from text
     const bodyText = $('body').text();
