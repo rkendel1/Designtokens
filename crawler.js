@@ -848,6 +848,9 @@ class Crawler {
       });
       const page = await context.newPage();
       try {
+        // Block unnecessary resources to speed up crawling
+        await page.route('**/*.{png,jpg,jpeg,gif,svg,webp,mp4,webm,woff,woff2}', route => route.abort());
+
         // Navigate and wait for network idle
         await page.goto(url, {
           waitUntil: 'networkidle',

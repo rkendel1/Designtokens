@@ -380,6 +380,41 @@ Return a structured JSON object for the Brand Kit with the following schema:
       return null;
     }
   }
+
+  async mapToFigmaTokens(designTokens) {
+    try {
+      const prompt = `Analyze the following raw design tokens and map them to a structured, semantic, Figma-like format.
+- Identify primary, secondary, and neutral color palettes. Use shades where possible (e.g., 100, 500, 900).
+- Identify heading and body typography.
+- Identify a logical spacing scale (e.g., sm, md, lg).
+
+Raw Tokens:
+${JSON.stringify(designTokens.slice(0, 100), null, 2)}
+
+Return a structured JSON object with the following schema:
+{
+  "colors": {
+    "primary": { "500": "#hex", "600": "#hex" },
+    "secondary": { "500": "#hex" },
+    "neutral": { "100": "#hex", "900": "#hex" }
+  },
+  "typography": {
+    "heading": { "fontFamily": "string", "fontWeight": "number" },
+    "body": { "fontFamily": "string", "fontWeight": "number" }
+  },
+  "spacing": {
+    "base": "1rem",
+    "sm": "0.5rem",
+    "lg": "2rem"
+  }
+}`;
+      const systemPrompt = 'You are a design systems expert. Your task is to convert a flat list of design tokens into a structured, semantic format suitable for tools like Figma.';
+      return await this.callLLM(prompt, systemPrompt, { type: 'json_object' });
+    } catch (error) {
+      console.error('Error mapping to Figma tokens:', error);
+      return null;
+    }
+  }
 }
 
 module.exports = new LLMService();
