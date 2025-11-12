@@ -1,5 +1,6 @@
 const axios = require('axios');
 const sharp = require('sharp');
+const ColorThief = require('colorthief');
 
 /**
  * Downloads an image from a URL and resizes it to standard icon sizes.
@@ -34,47 +35,26 @@ async function resizeLogo(imageUrl) {
 }
 
 /**
- * Extracts a color palette from an image buffer using k-means clustering.
+ * Extracts a color palette from an image buffer using the ColorThief library.
  * @param {Buffer} imageBuffer - The image buffer from the screenshot.
- * @param {number} k - The number of clusters (colors) to find.
+ * @param {number} k - The number of colors to extract.
  * @returns {Promise<Array<string>>} An array of RGB color strings representing the palette.
  */
 async function extractColorPalette(imageBuffer, k = 8) {
   try {
-    const { kmeans } = await import('ml-kmeans');
+    // getPalette returns an array of [R, G, B] arrays.
+    const paletteRGB = await ColorThief.getPalette(imageBuffer, k);
     
-    const { data } = await sharp(imageBuffer)
-      .raw()
-      .ensureAlpha()
-      .toBuffer({ resolveWithObject: true });
-
-    const pixels = [];
-    for (let i = 0; i < data.length; i += 4) {
-      pixels.push([data[i], data[i + 1], data[i + 2]]);
+    if (!paletteRGB) {
+      return [];
     }
 
-    // Downsample for performance on large images
-    const sampleSize = 10000;
-    const step = Math.max(1, Math.floor(pixels.length / sampleSize));
-    const sampledPixels = pixels.filter((_, i) => i % step === 0);
-
-    if (sampledPixels.length < k) {
-      console.warn(`Not enough unique pixels to perform clustering with k=${k}.`);
-      const uniqueColors = Array.from(new Set(sampledPixels.map(p => `rgb(${p[0]}, ${p[1]}, ${p[2]})`)));
-      return uniqueColors.slice(0, k);
-    }
-
-    const result = kmeans(sampledPixels, k, { initialization: 'kmeans++' });
-    const centroids = result.centroids.map(c => c.centroid);
-
-    const palette = centroids.map(centroid => {
-      const [r, g, b] = centroid.map(Math.round);
-      return `rgb(${r}, ${g}, ${b})`;
-    });
-
+    // Convert the palette to the expected 'rgb(r, g, b)' string format.
+    const palette = paletteRGB.map(rgb => `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`);
+    
     return palette;
   } catch (error) {
-    console.error('Failed to extract color palette with k-means:', error.message);
+    console.error('Failed to extract color palette with ColorThief:', error.message);
     return [];
   }
 }
