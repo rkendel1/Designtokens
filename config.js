@@ -1,5 +1,10 @@
 const dotenv = require('dotenv');
+const path = require('path');
 
+// Load .env.local first to give it priority over .env
+dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+
+// Load .env (will not override any variables already set from .env.local)
 dotenv.config();
 
 module.exports = {
