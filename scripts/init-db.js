@@ -1,4 +1,4 @@
-require('./load-env.js'); // Load environment variables first
+require('dotenv').config(); // Load environment variables first
 const { Client } = require('pg');
 const fs = require('fs');
 const path = require('path');

@@ -1,4 +1,4 @@
-require('./scripts/load-env.js'); // Load environment variables first
+require('dotenv').config(); // Load environment variables first
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
