@@ -4,10 +4,7 @@ const robotsParser = require('robots-parser');
 const axios = require('axios');
 const config = require('./config');
 const llm = require('./llm');
-const ColorThief = require('colorthief'); // For screenshot-based color extraction
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const { extractColorPalette } = require('./image-processor');
 
 // User agent pool for rotation
 const USER_AGENTS = [
@@ -553,26 +550,9 @@ class Crawler {
       
       for (const section of sectionsToProcess) {
         try {
-          // Take screenshot of the section
           const screenshot = await section.screenshot({ type: 'png' });
-          
-          // Save to temp file for ColorThief
-          const tmpDir = os.tmpdir();
-          const tmpFile = path.join(tmpDir, `section_${Date.now()}_${Math.floor(Math.random()*10000)}.png`);
-          fs.writeFileSync(tmpFile, screenshot);
-          
-          // Extract dominant colors from section
-          const palette = await ColorThief.getPalette(tmpFile, 5); // top 5 colors per section
-          if (palette) {
-            palette.forEach(rgb => {
-              if (Array.isArray(rgb) && rgb.length === 3) {
-                sectionColors.add(`rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`);
-              }
-            });
-          }
-          
-          // Clean up temp file
-          fs.unlinkSync(tmpFile);
+          const palette = await extractColorPalette(screenshot, 5); // 5 clusters
+          palette.forEach(color => sectionColors.add(color));
         } catch (e) {
           // Skip sections that fail to screenshot
           continue;
@@ -959,19 +939,10 @@ class Crawler {
         if (takeScreenshot) {
           screenshot = await page.screenshot({ fullPage: true, type: 'png' });
           try {
-            const tmpDir = os.tmpdir();
-            const tmpFile = path.join(tmpDir, `crawler_screenshot_${Date.now()}_${Math.floor(Math.random()*10000)}.png`);
-            fs.writeFileSync(tmpFile, screenshot);
-            const palette = await ColorThief.getPalette(tmpFile, 8);
-            screenshotColors = (palette || []).map(rgb => {
-              if (Array.isArray(rgb) && rgb.length === 3) {
-                return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-              }
-              return null;
-            }).filter(Boolean);
-            fs.unlinkSync(tmpFile);
+            screenshotColors = await extractColorPalette(screenshot, 8);
           } catch (e) {
             console.warn('Screenshot-based color extraction failed:', e.message);
+            screenshotColors = [];
           }
           try {
             sectionColors = await this.extractSectionColors(page);
