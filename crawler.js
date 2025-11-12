@@ -809,6 +809,7 @@ class Crawler {
   // --- Deep crawl mode with JSON sanitization for Postgres and base64 screenshots ---
   async crawlDeep(url, options = {}) {
     const { takeScreenshot = true } = options;
+    const isLlmConfigured = config.openai.apiKey && config.openai.apiKey.startsWith('sk-');
     // Check robots.txt
     const allowed = await this.checkRobots(url);
     if (!allowed) {
@@ -841,11 +842,12 @@ class Crawler {
     }
     // The following approach ensures full coverage for JS-heavy, modern SaaS pages.
     return await this.withRetry(async () => {
-      const page = await this.browser.newPage();
+      const context = await this.browser.newContext({
+        ignoreHTTPSErrors: true,
+        userAgent: this.getRandomUserAgent()
+      });
+      const page = await context.newPage();
       try {
-        await page.setExtraHTTPHeaders({
-          'User-Agent': this.getRandomUserAgent()
-        });
         // Navigate and wait for network idle
         await page.goto(url, {
           waitUntil: 'networkidle',
@@ -966,7 +968,7 @@ class Crawler {
         structuredData.products = structuredData.products || [];
         structuredData.products.push(...featureSections);
         // --- LLM ENRICHMENT ---
-        if (this.llm) {
+        if (this.llm && isLlmConfigured) {
           try {
             const enrichedContext = {
               ...mergedStyles,
@@ -1034,9 +1036,8 @@ class Crawler {
           faviconUrl,
           mode: 'deep'
         });
-      } catch (error) {
-        await page.close();
-        throw error;
+      } finally {
+        await context.close();
       }
     });
   }
