@@ -4,8 +4,8 @@
   "description": "OpenAI-powered site crawler and design token extractor",
   "main": "server.js",
   "scripts": {
-    "start": "node -r dotenv/config scripts/init-db.js && node -r dotenv/config server.js",
-    "dev": "node -r dotenv/config scripts/init-db.js && nodemon -r dotenv/config server.js",
+    "start": "node scripts/init-db.js && node server.js",
+    "dev": "node scripts/init-db.js && nodemon server.js",
     "test": "jest --coverage",
     "test:watch": "jest --watch"
   },
