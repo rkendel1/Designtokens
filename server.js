@@ -6,8 +6,9 @@ const NodeCache = require('node-cache');
 const config = require('./config');
 const crawler = require('./crawler');
 const llm = require('./llm');
-const supabase = require('./supabase-client'); // New Supabase client
-const generateBrandProfilePDF = require('./pdf-generator'); // Updated PDF generator
+const supabase = require('./supabase-client'); // Anon client
+const supabaseService = require('./supabase-service-client'); // Service client
+const generateBrandProfilePDF = require('./pdf-generator');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
@@ -67,12 +68,27 @@ app.post('/api/crawl', async (req, res) => {
     crawlData.computedStyles = crawlData.computedStyles || {};
     crawlData.meta = crawlData.meta || {};
     crawlData.textContent = crawlData.textContent || "";
+    crawlData.designTokens = crawlData.designTokens || {};
 
-    // --- AI Synthesis ---
+    // --- Handle case where LLM is not configured ---
     if (!isLlmConfigured) {
-      return res.status(400).json({ error: 'LLM is not configured. Cannot generate semantic brand kit.' });
+      console.warn('LLM not configured. Skipping AI synthesis and returning raw crawl data.');
+      const rawResponse = {
+        site: {
+          url: crawlData.url,
+          domain: crawlData.domain,
+          title: crawlData.meta.title,
+          description: crawlData.meta.description,
+        },
+        companyInfo: crawlData.structuredData,
+        designTokens: crawlData.designTokens,
+        message: 'LLM not configured. This is raw data without AI analysis.'
+      };
+      cache.set(cacheKey, rawResponse);
+      return res.json(rawResponse);
     }
 
+    // --- AI Synthesis (if LLM is configured) ---
     const semanticBrandKit = await llm.generateSemanticBrandKit(crawlData);
 
     if (!semanticBrandKit) {
@@ -83,14 +99,14 @@ app.post('/api/crawl', async (req, res) => {
     const brandId = uuidv4();
     let pdfUrl = null;
 
-    if (supabase) {
+    if (supabaseService) { // Use service client for elevated privileges
       try {
         // 1. Generate PDF
         const pdfBuffer = await generateBrandProfilePDF({ ...semanticBrandKit, url, brandId });
 
-        // 2. Upload PDF to Supabase Storage
+        // 2. Upload PDF to Supabase Storage using the service client
         const pdfPath = `${brandId}.pdf`;
-        const { error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabaseService.storage
           .from('brand-kits') // Bucket name
           .upload(pdfPath, pdfBuffer, {
             contentType: 'application/pdf',
@@ -99,7 +115,7 @@ app.post('/api/crawl', async (req, res) => {
 
         if (uploadError) throw uploadError;
 
-        // 3. Get public URL for the PDF
+        // 3. Get public URL for the PDF (can use anon client for this)
         const { data: urlData } = supabase.storage
           .from('brand-kits')
           .getPublicUrl(pdfPath);
@@ -108,7 +124,6 @@ app.post('/api/crawl', async (req, res) => {
 
       } catch (error) {
         console.error('Supabase PDF upload error:', error);
-        // Don't fail the whole request, just log the error and proceed without a PDF URL
       }
     }
 
@@ -122,11 +137,11 @@ app.post('/api/crawl', async (req, res) => {
         url: crawlData.logoUrl
       },
       generatedAt: new Date().toISOString(),
-      pdfKitUrl: pdfUrl, // Use the real Supabase URL
+      pdfKitUrl: pdfUrl,
       status: "ready"
     };
 
-    // 4. Persist the final brand kit JSON to Supabase table
+    // 4. Persist the final brand kit JSON to Supabase table (using anon client)
     if (supabase) {
       try {
         const { error: insertError } = await supabase
@@ -135,14 +150,13 @@ app.post('/api/crawl', async (req, res) => {
               brandId: finalResponse.brandId,
               url: finalResponse.url,
               name: finalResponse.name,
-              kit_data: finalResponse // Store the whole object
+              kit_data: finalResponse
           }]);
         
         if (insertError) throw insertError;
 
       } catch (error) {
         console.error('Supabase insert error:', error);
-        // Log and continue
       }
     }
 
