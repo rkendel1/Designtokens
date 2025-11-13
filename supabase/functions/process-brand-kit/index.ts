@@ -1,8 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import OpenAI from 'https://esm.sh/openai@4.20.1';
-// Note: pdfkit is not fully compatible with Deno, so we'll use a simplified text-based placeholder.
-// A full implementation would require a Deno-compatible PDF library or a different approach.
+import { PDFDocument, rgb, StandardFonts } from 'https://esm.sh/pdf-lib@1.17.1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -13,6 +12,57 @@ const corsHeaders = {
 const openai = new OpenAI({
   apiKey: Deno.env.get('OPENAI_API_KEY'),
 });
+
+// Helper to parse RGB color strings
+function parseRgb(rgbString: string) {
+    if (!rgbString || !rgbString.includes('rgb')) return { r: 0, g: 0, b: 0 };
+    const [r, g, b] = rgbString.match(/\d+/g)!.map(Number);
+    return { r: r / 255, g: g / 255, b: b / 255 };
+}
+
+// PDF Generator using pdf-lib
+async function generateBrandProfilePDF(kit: any, siteUrl: string) {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage();
+    const { height } = page.getSize();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    let yPos = height - 70;
+
+    // Title
+    page.drawText(kit.name || 'Brand Profile', { x: 50, y: yPos, font: boldFont, size: 24 });
+    yPos -= 30;
+    page.drawText(siteUrl, { x: 50, y: yPos, font, size: 12, color: rgb(0.5, 0.5, 0.5) });
+    yPos -= 40;
+
+    // Colors
+    page.drawText('Color Palette', { x: 50, y: yPos, font: boldFont, size: 18 });
+    yPos -= 30;
+    
+    const colors = kit.colors || {};
+    for (const [name, value] of Object.entries(colors)) {
+        if (typeof value === 'string') {
+            const color = parseRgb(value);
+            page.drawRectangle({ x: 50, y: yPos, width: 20, height: 20, color: rgb(color.r, color.g, color.b) });
+            page.drawText(`${name}: ${value}`, { x: 80, y: yPos + 5, font, size: 12 });
+            yPos -= 30;
+        }
+    }
+    yPos -= 20;
+
+    // Brand Voice
+    page.drawText('Brand Voice', { x: 50, y: yPos, font: boldFont, size: 18 });
+    yPos -= 30;
+    const voice = kit.voice || {};
+    page.drawText(`Tone: ${voice.tone || 'N/A'}`, { x: 50, y: yPos, font, size: 12 });
+    yPos -= 20;
+    page.drawText(`Personality: ${voice.personality || 'N/A'}`, { x: 50, y: yPos, font, size: 12 });
+
+    const pdfBytes = await pdfDoc.save();
+    return pdfBytes; // Returns a Uint8Array
+}
+
 
 // Comprehensive LLM prompt for brand kit generation
 async function generateSemanticBrandKit(crawlData: any) {
@@ -83,37 +133,19 @@ serve(async (req) => {
     const brandKit = await generateSemanticBrandKit(siteData);
 
     // 3. Save AI-generated data to respective tables
-    // Company Info
     await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
-    
-    // Brand Voice
     await supabase.from('brand_voice').insert({
         site_id: siteId,
         summary: `Tone: ${brandKit.voice.tone}, Personality: ${brandKit.voice.personality}`,
         guidelines: brandKit.voice
     });
-
-    // Design Tokens
     if (brandKit.design_tokens && brandKit.design_tokens.length > 0) {
         const tokensToInsert = brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId }));
         await supabase.from('design_tokens').insert(tokensToInsert);
     }
 
-    // 4. Generate a simple text file as a placeholder for the PDF
-    const pdfContent = `
-Brand Profile for: ${brandKit.name}
-URL: ${siteData.url}
-
---- Color Palette ---
-Primary: ${brandKit.colors.primary}
-Secondary: ${brandKit.colors.secondary}
-Accent: ${brandKit.colors.accent}
-
---- Brand Voice ---
-Tone: ${brandKit.voice.tone}
-Personality: ${brandKit.voice.personality}
-    `;
-    const pdfBuffer = new TextEncoder().encode(pdfContent);
+    // 4. Generate PDF
+    const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url);
 
     // 5. Upload PDF to Storage
     const pdfPath = `${siteId}-brand-profile.pdf`;
