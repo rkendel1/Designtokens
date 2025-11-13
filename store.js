@@ -88,6 +88,7 @@ class Store {
         contact_emails: crawlData.structuredData.emails,
         contact_phones: crawlData.structuredData.phones,
         structured_json: crawlData.structuredData,
+        logo_url: crawlData.logoUrl,
     });
 
     await this.createProductsBulk(siteId, crawlData.structuredData.products);

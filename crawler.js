@@ -621,19 +621,9 @@ class Crawler {
       // Find logo
       let logoUrl = null;
       const logoSelectors = [
-        // High confidence selectors
-        'img[alt*="logo" i]',
-        'img[src*="logo"]',
-        'a[class*="logo"] img',
-        '[class*="logo"] img',
-        // Medium confidence selectors for images inside header/banner links
-        'header a[href="/"] img',
-        '[role="banner"] a[href="/"] img',
-        'header > a > img',
-        // Lower confidence, but common
-        'header img',
-        // SVG with a src attribute (not inline)
-        'svg[aria-label*="logo" i]',
+        'img[alt*="logo" i]', 'img[src*="logo"]', 'a[class*="logo"] img',
+        '[class*="logo"] img', 'header a[href="/"] img', '[role="banner"] a[href="/"] img',
+        'header > a > img', 'header img', 'svg[aria-label*="logo" i]',
       ];
       for (const selector of logoSelectors) {
         const el = document.querySelector(selector);
@@ -643,25 +633,7 @@ class Crawler {
         }
       }
 
-      // Find favicon
-      let faviconUrl = null;
-      const faviconSelectors = [
-        'link[rel="icon"]',
-        'link[rel="shortcut icon"]',
-        'link[rel="apple-touch-icon"]',
-      ];
-      for (const selector of faviconSelectors) {
-        const el = document.querySelector(selector);
-        if (el) {
-          faviconUrl = toAbsolute(el.href);
-          if (faviconUrl) break;
-        }
-      }
-      if (!faviconUrl) {
-        faviconUrl = toAbsolute('/favicon.ico');
-      }
-
-      return { logoUrl, faviconUrl };
+      return { logoUrl };
     }, baseUrl);
   }
 
@@ -931,7 +903,7 @@ class Crawler {
         await this.handleLazyLoad(page);
         await page.waitForTimeout(1000);
         const html = await page.content();
-        const { logoUrl, faviconUrl } = await this.extractLogoAndFavicon(page, url);
+        const { logoUrl } = await this.extractLogoAndFavicon(page, url);
         const heroImageUrl = await this.extractHeroImage(page, url);
         const cssData = await this.extractCSSVariables(page);
         const cssVariables = cssData.variables || {};
@@ -1083,7 +1055,6 @@ class Crawler {
           browserUsed: this.browserType,
           captchaDetected: hasCaptcha,
           logoUrl,
-          faviconUrl,
           heroImageUrl,
           mode: 'deep'
         });

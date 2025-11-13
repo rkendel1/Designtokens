@@ -8,35 +8,46 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: Deno.env.get('OPENAI_API_KEY'),
 });
 
-// Helper to parse RGB color strings
 function parseRgb(rgbString: string) {
     if (!rgbString || !rgbString.includes('rgb')) return { r: 0, g: 0, b: 0 };
     const [r, g, b] = rgbString.match(/\d+/g)!.map(Number);
     return { r: r / 255, g: g / 255, b: b / 255 };
 }
 
-// PDF Generator using pdf-lib
-async function generateBrandProfilePDF(kit: any, siteUrl: string) {
+async function generateBrandProfilePDF(kit: any, siteUrl: string, logoBytes: Uint8Array | null) {
     const pdfDoc = await PDFDocument.create();
     const page = pdfDoc.addPage();
-    const { height } = page.getSize();
+    const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     let yPos = height - 70;
 
-    // Title
+    // Embed Logo if available
+    if (logoBytes) {
+        try {
+            const logoImage = await pdfDoc.embedPng(logoBytes);
+            const logoDims = logoImage.scale(0.25); // Scale to 25%
+            page.drawImage(logoImage, {
+                x: width - logoDims.width - 50,
+                y: height - logoDims.height - 40,
+                width: logoDims.width,
+                height: logoDims.height,
+            });
+        } catch (e) {
+            console.error("Failed to embed logo:", e.message);
+        }
+    }
+
     page.drawText(kit.name || 'Brand Profile', { x: 50, y: yPos, font: boldFont, size: 24 });
     yPos -= 30;
     page.drawText(siteUrl, { x: 50, y: yPos, font, size: 12, color: rgb(0.5, 0.5, 0.5) });
     yPos -= 40;
 
-    // Colors
     page.drawText('Color Palette', { x: 50, y: yPos, font: boldFont, size: 18 });
     yPos -= 30;
     
@@ -51,7 +62,6 @@ async function generateBrandProfilePDF(kit: any, siteUrl: string) {
     }
     yPos -= 20;
 
-    // Brand Voice
     page.drawText('Brand Voice', { x: 50, y: yPos, font: boldFont, size: 18 });
     yPos -= 30;
     const voice = kit.voice || {};
@@ -60,11 +70,9 @@ async function generateBrandProfilePDF(kit: any, siteUrl: string) {
     page.drawText(`Personality: ${voice.personality || 'N/A'}`, { x: 50, y: yPos, font, size: 12 });
 
     const pdfBytes = await pdfDoc.save();
-    return pdfBytes; // Returns a Uint8Array
+    return pdfBytes;
 }
 
-
-// Comprehensive LLM prompt for brand kit generation
 async function generateSemanticBrandKit(crawlData: any) {
     const prompt = `
     Analyze the raw website data below to generate a comprehensive, semantic brand kit.
@@ -73,31 +81,17 @@ async function generateSemanticBrandKit(crawlData: any) {
     - Description: ${crawlData.description}
     - URL: ${crawlData.url}
     - Content Snippet: ${crawlData.raw_html ? crawlData.raw_html.substring(0, 2000) : ''}
-    
-    YOUR TASK:
-    Return a single JSON object with the following schema. Infer semantic meaning (e.g., which color is 'primary').
-    
     TARGET JSON SCHEMA:
-    {
-      "name": "string",
-      "tagline": "string",
-      "colors": { "primary": "string", "secondary": "string", "accent": "string", "background": "string", "text": "string" },
-      "typography": { "fontFamily": { "heading": "string", "body": "string" } },
-      "voice": { "tone": "string", "personality": "string", "keyPhrases": ["string"] },
-      "design_tokens": [ { "token_key": "string", "token_type": "string", "token_value": "string" } ]
-    }`;
+    { "name": "string", "tagline": "string", "colors": { "primary": "string", "secondary": "string" }, "voice": { "tone": "string", "personality": "string" }, "design_tokens": [ { "token_key": "string", "token_type": "string", "token_value": "string" } ] }`;
     
     const response = await openai.chat.completions.create({
         model: 'gpt-4-turbo',
-        messages: [{ role: 'system', content: 'You are a world-class design systems expert.' }, { role: 'user', content: prompt }],
+        messages: [{ role: 'system', content: 'You are a design systems expert.' }, { role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
     });
 
     const content = response.choices[0].message.content;
-    if (!content) {
-        throw new Error("No content in LLM response");
-    }
-    // Robust JSON parsing
+    if (!content) throw new Error("No content in LLM response");
     try {
         return JSON.parse(content);
     } catch (e) {
@@ -108,71 +102,54 @@ async function generateSemanticBrandKit(crawlData: any) {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const { siteId } = await req.json();
     if (!siteId) throw new Error('siteId is required');
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
-    // 1. Fetch raw crawl data
-    const { data: siteData, error: fetchError } = await supabase
-      .from('sites')
-      .select('title, description, url, raw_html')
-      .eq('id', siteId)
-      .single();
+    const { data: siteData, error: fetchError } = await supabase.from('sites').select('title, description, url, raw_html').eq('id', siteId).single();
     if (fetchError) throw fetchError;
 
-    // 2. Perform AI Analysis
+    const { data: companyInfo, error: companyError } = await supabase.from('company_info').select('logo_url').eq('site_id', siteId).single();
+    if (companyError) throw companyError;
+
     const brandKit = await generateSemanticBrandKit(siteData);
 
-    // 3. Save AI-generated data to respective tables
-    await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
-    await supabase.from('brand_voice').insert({
-        site_id: siteId,
-        summary: `Tone: ${brandKit.voice.tone}, Personality: ${brandKit.voice.personality}`,
-        guidelines: brandKit.voice
-    });
-    if (brandKit.design_tokens && brandKit.design_tokens.length > 0) {
-        const tokensToInsert = brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId }));
-        await supabase.from('design_tokens').insert(tokensToInsert);
+    let logoBytes: Uint8Array | null = null;
+    if (companyInfo.logo_url) {
+        const response = await fetch(companyInfo.logo_url);
+        if (response.ok) {
+            logoBytes = new Uint8Array(await response.arrayBuffer());
+            const logoPath = `${siteId}-logo.png`;
+            await supabase.storage.from('logos').upload(logoPath, logoBytes, { contentType: 'image/png', upsert: true });
+            const { data: logoUrlData } = supabase.storage.from('logos').getPublicUrl(logoPath);
+            await supabase.from('company_info').update({ logo_url: logoUrlData.publicUrl }).eq('site_id', siteId);
+        }
     }
 
-    // 4. Generate PDF
-    const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url);
+    await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
+    await supabase.from('brand_voice').insert({ site_id: siteId, summary: `Tone: ${brandKit.voice.tone}`, guidelines: brandKit.voice });
+    if (brandKit.design_tokens?.length > 0) {
+        await supabase.from('design_tokens').insert(brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId })));
+    }
 
-    // 5. Upload PDF to Storage
+    const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url, logoBytes);
     const pdfPath = `${siteId}-brand-profile.pdf`;
-    const { error: uploadError } = await supabase.storage
-      .from('brand-kits')
-      .upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
-    if (uploadError) throw uploadError;
-
-    // 6. Get public URL and update site record
+    await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
     const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
-    const pdfKitUrl = urlData.publicUrl;
+    
+    await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready' }).eq('id', siteId);
 
-    await supabase
-      .from('sites')
-      .update({ pdf_kit_url: pdfKitUrl, status: 'ready' })
-      .eq('id', siteId);
-
-    return new Response(JSON.stringify({ success: true, pdfKitUrl }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 200,
+    return new Response(JSON.stringify({ success: true, pdfKitUrl: urlData.publicUrl }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200,
     });
-
   } catch (error) {
     console.error('Edge Function Error:', error);
     return new Response(JSON.stringify({ error: error.message }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500,
     });
   }
 })
