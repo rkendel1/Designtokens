@@ -254,6 +254,32 @@ serve(async (req) => {
 
     await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready', status_message: 'Brand kit generated successfully.' }).eq('id', siteId);
 
+    // --- Assemble and store the perfect JSON ---
+    const perfectJson = {
+      siteId: siteId,
+      url: siteData.url,
+      name: brandKit.name,
+      tagline: brandKit.tagline,
+      pdfUrl: urlData.publicUrl,
+      generatedAt: new Date().toISOString(),
+      kit: brandKit
+    };
+
+    const { error: profileError } = await supabase
+      .from('brand_profiles')
+      .upsert({
+        site_id: siteId,
+        profile_data: perfectJson,
+      }, {
+        onConflict: 'site_id'
+      });
+
+    if (profileError) {
+      console.error('Failed to save perfect JSON to brand_profiles:', profileError);
+      // Non-fatal error, so we don't throw
+    }
+    // --- End of new logic ---
+
     return new Response(JSON.stringify({ success: true, pdfKitUrl: urlData.publicUrl }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200,
     });
