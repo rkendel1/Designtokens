@@ -15,26 +15,26 @@ async function processCrawl(url) {
     crawlData.textContent = crawlData.textContent || "";
     crawlData.designTokens = crawlData.designTokens || {};
 
-    if (!isLlmConfigured) {
-        console.warn('LLM not configured. Skipping AI synthesis and returning raw crawl data.');
-        return {
-            site: { url: crawlData.url, domain: crawlData.domain, title: crawlData.meta.title, description: crawlData.meta.description },
-            companyInfo: crawlData.structuredData,
-            designTokens: crawlData.designTokens,
-            message: 'LLM not configured. This is raw data without AI analysis.'
-        };
-    }
-
-    const semanticBrandKit = await llm.generateSemanticBrandKit(crawlData);
-    if (!semanticBrandKit) {
-        throw new Error('Failed to generate brand kit from LLM.');
+    let semanticBrandKit = null;
+    if (isLlmConfigured) {
+        try {
+            semanticBrandKit = await llm.generateSemanticBrandKit(crawlData);
+            if (!semanticBrandKit) {
+                console.warn('Failed to generate brand kit from LLM. Proceeding to save raw data.');
+            }
+        } catch (error) {
+            console.error('Error during LLM synthesis:', error.message);
+            console.warn('Proceeding to save raw data without AI analysis.');
+        }
+    } else {
+        console.warn('LLM not configured. Skipping AI synthesis and saving raw crawl data.');
     }
 
     const savedData = await store.saveCrawlResult(crawlData, semanticBrandKit);
     const brandId = savedData.siteId;
 
     let pdfUrl = null;
-    if (supabaseService) {
+    if (supabaseService && semanticBrandKit) { // Only generate PDF if we have the semantic kit
         try {
             const pdfBuffer = await generateBrandProfilePDF({ ...savedData, url, brandId });
             const pdfPath = `${brandId}.pdf`;

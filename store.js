@@ -44,6 +44,7 @@ class Store {
   }
 
   async createDesignTokensBulk(siteId, tokens) {
+    if (!tokens || tokens.length === 0) return null;
     const tokensWithSiteId = tokens.map(token => ({ site_id: siteId, ...token }));
     const { data, error } = await supabase
       .from('design_tokens')
@@ -97,7 +98,7 @@ class Store {
       await this.deleteSite(existingSite.id);
     }
 
-    // 1. Create Site
+    // 1. Create Site (always happens)
     const site = await this.createSite({
       url: crawlData.url,
       domain: crawlData.domain,
@@ -106,54 +107,74 @@ class Store {
       raw_html: crawlData.html,
       screenshot: crawlData.screenshot,
     });
-
     const siteId = site.id;
 
-    // 2. Create Company Info
-    await this.createCompanyInfo(siteId, {
-      company_name: semanticBrandKit.name,
-      contact_emails: crawlData.structuredData.emails,
-      contact_phones: crawlData.structuredData.phones,
-      structured_json: crawlData.structuredData,
-    });
-
-    // 3. Transform and Create Design Tokens
-    const tokensToInsert = [];
-    const tokenCategories = ['colors', 'typography', 'spacing', 'radius', 'shadows'];
-    for (const category of tokenCategories) {
-      if (semanticBrandKit[category]) {
-        for (const [key, value] of Object.entries(semanticBrandKit[category])) {
-          if (typeof value === 'string') {
-            tokensToInsert.push({
-              token_key: key,
-              token_type: category,
-              token_value: value,
-              source: 'llm-normalized',
-            });
-          } else if (typeof value === 'object' && value !== null) {
-            for (const [subKey, subValue] of Object.entries(value)) {
-               tokensToInsert.push({
-                token_key: `${key}.${subKey}`,
-                token_type: category,
-                token_value: subValue.toString(),
-                source: 'llm-normalized',
-              });
-            }
-          }
-        }
-      }
-    }
-    await this.createDesignTokensBulk(siteId, tokensToInsert);
-
-    // 4. Create Products
+    // Always save products from raw crawl data
     await this.createProductsBulk(siteId, crawlData.structuredData.products);
 
-    // 5. Create Brand Voice
-    if (semanticBrandKit.voice) {
-      await this.createBrandVoice(siteId, semanticBrandKit.voice, crawlData.textContent);
-    }
+    // If we have the semantic kit from the LLM, save the structured, AI-analyzed data.
+    if (semanticBrandKit) {
+        await this.createCompanyInfo(siteId, {
+            company_name: semanticBrandKit.name,
+            contact_emails: crawlData.structuredData.emails,
+            contact_phones: crawlData.structuredData.phones,
+            structured_json: crawlData.structuredData,
+        });
 
-    return { siteId, ...semanticBrandKit };
+        const tokensToInsert = [];
+        const tokenCategories = ['colors', 'typography', 'spacing', 'radius', 'shadows'];
+        for (const category of tokenCategories) {
+            if (semanticBrandKit[category]) {
+                for (const [key, value] of Object.entries(semanticBrandKit[category])) {
+                    if (typeof value === 'string') {
+                        tokensToInsert.push({ token_key: key, token_type: category, token_value: value, source: 'llm-normalized' });
+                    } else if (typeof value === 'object' && value !== null) {
+                        for (const [subKey, subValue] of Object.entries(value)) {
+                           tokensToInsert.push({ token_key: `${key}.${subKey}`, token_type: category, token_value: subValue.toString(), source: 'llm-normalized' });
+                        }
+                    }
+                }
+            }
+        }
+        await this.createDesignTokensBulk(siteId, tokensToInsert);
+
+        if (semanticBrandKit.voice) {
+            await this.createBrandVoice(siteId, semanticBrandKit.voice, crawlData.textContent);
+        }
+        
+        return { siteId, ...semanticBrandKit };
+    } else {
+        // Fallback: Save raw data if LLM is not available or failed.
+        await this.createCompanyInfo(siteId, {
+            company_name: crawlData.meta.title, // Use site title as fallback
+            contact_emails: crawlData.structuredData.emails,
+            contact_phones: crawlData.structuredData.phones,
+            structured_json: crawlData.structuredData,
+        });
+
+        const rawTokens = crawlData.designTokens || {};
+        const tokensToInsert = [];
+        const tokenTypes = ['colors', 'fonts', 'fontSizes', 'spacing', 'borderRadius', 'shadows'];
+        for (const tokenType of tokenTypes) {
+            if (Array.isArray(rawTokens[tokenType])) {
+                rawTokens[tokenType].forEach((value, index) => {
+                    tokensToInsert.push({ token_key: `${tokenType}_${index}`, token_type: tokenType, token_value: String(value), source: 'raw-crawl' });
+                });
+            }
+        }
+        if (rawTokens.cssVariables && typeof rawTokens.cssVariables === 'object') {
+            Object.entries(rawTokens.cssVariables).forEach(([key, value]) => {
+                tokensToInsert.push({ token_key: key, token_type: 'css-variable', token_value: String(value), source: 'raw-crawl' });
+            });
+        }
+        await this.createDesignTokensBulk(siteId, tokensToInsert);
+
+        return { 
+            siteId, 
+            name: crawlData.meta.title,
+            message: 'LLM not configured or failed. Raw data has been saved.'
+        };
+    }
   }
 }
 
