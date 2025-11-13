@@ -14,70 +14,81 @@ const openai = new OpenAI({
   apiKey: Deno.env.get('OPENAI_API_KEY'),
 });
 
-async function generateSemanticBrandKit(siteData: any, companyInfo: any, designTokens: any[], brandVoice: any, siteId: string) {
-    const prompt = `
-    You are a world-class design systems expert. Your task is to analyze the following pre-processed website data and synthesize it into a comprehensive, semantic brand kit in a specific JSON format.
+function parseRgb(rgbString: string) {
+    if (!rgbString || !rgbString.includes('rgb')) return { r: 0, g: 0, b: 0 };
+    const [r, g, b] = rgbString.match(/\d+/g)!.map(Number);
+    return { r: r / 255, g: g / 255, b: b / 255 };
+}
 
-    **PRE-PROCESSED WEBSITE DATA:**
-    1.  **Site ID:** ${siteId}
-    2.  **Company Info:** ${JSON.stringify(companyInfo)}
-    3.  **Extracted Design Tokens (sample):** ${JSON.stringify(designTokens.slice(0, 50))}
-    4.  **Initial Brand Voice Analysis:** ${JSON.stringify(brandVoice)}
-    5.  **Full Page HTML (for context):**
-        \`\`\`html
-        ${siteData.raw_html ? siteData.raw_html.substring(0, 6000) : ''}
-        \`\`\`
+async function generateBrandProfilePDF(kit: any, siteUrl: string, logoBytes: Uint8Array | null) {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage();
+    const { width, height } = page.getSize();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-    **YOUR TASK:**
-    Synthesize all the pre-processed data above into a single, structured JSON object that follows the exact schema provided. Your main job is to infer semantic meaning (e.g., which of the provided colors is 'primary', which font size is 'lg', what are the button styles) from the raw tokens and HTML.
+    let yPos = height - 70;
 
-    **IMPORTANT RULES:**
-    - The \`brandId\` field MUST be the Site ID provided.
-    - Use the logo URL from the company info.
-    - All color values MUST be in a web-safe format like HEX ("#RRGGBB") or RGB ("rgb(r, g, b)").
-
-    **TARGET JSON SCHEMA:**
-    \`\`\`json
-    {
-      "brandId": "${siteId}",
-      "url": "${siteData.url}",
-      "name": "string",
-      "tagline": "string",
-      "logo": { "url": "string", "width": "number", "height": "number", "alt": "string" },
-      "colors": {
-        "primary": "string", "secondary": "string", "accent": "string", "background": "string", "surface": "string",
-        "success": "string", "warning": "string", "error": "string",
-        "text": { "primary": "string", "secondary": "string", "muted": "string", "onPrimary": "string" }
-      },
-      "typography": {
-        "fontFamily": { "heading": "string", "body": "string" },
-        "fontWeight": { "regular": 400, "medium": 500, "semibold": 600, "bold": 700 },
-        "fontSize": { "xs": "string", "sm": "string", "base": "string", "lg": "string", "xl": "string", "2xl": "string" },
-        "lineHeight": { "tight": 1.25, "normal": 1.5, "relaxed": 1.75 }
-      },
-      "spacing": { "4": "1rem", "8": "2rem" },
-      "radius": { "default": "0.25rem", "lg": "0.5rem", "full": "9999px" },
-      "shadows": { "default": "string", "md": "string", "lg": "string" },
-      "voice": {
-        "tone": "string", "personality": "string", "keyPhrases": ["string"],
-        "writingStyle": { "sentenceLength": "string", "activeVoice": "boolean", "jargonLevel": "string", "ctaStyle": "string" },
-        "examples": { "headline": "string", "subheadline": "string", "cta": "string" }
-      },
-      "components": {
-        "button": { "base": "string", "variants": { "primary": "string" }, "sizes": { "md": "string" } },
-        "card": { "base": "string" }
-      },
-      "cssVariables": "string",
-      "generatedAt": "string",
-      "pdfKitUrl": "string",
-      "status": "string"
+    // Embed Logo if available
+    if (logoBytes) {
+        try {
+            const logoImage = await pdfDoc.embedPng(logoBytes);
+            const logoDims = logoImage.scale(0.25); // Scale to 25%
+            page.drawImage(logoImage, {
+                x: width - logoDims.width - 50,
+                y: height - logoDims.height - 40,
+                width: logoDims.width,
+                height: logoDims.height,
+            });
+        } catch (e) {
+            console.error("Failed to embed logo:", e.message);
+        }
     }
-    \`\`\`
-    `;
+
+    page.drawText(kit.name || 'Brand Profile', { x: 50, y: yPos, font: boldFont, size: 24 });
+    yPos -= 30;
+    page.drawText(siteUrl, { x: 50, y: yPos, font, size: 12, color: rgb(0.5, 0.5, 0.5) });
+    yPos -= 40;
+
+    page.drawText('Color Palette', { x: 50, y: yPos, font: boldFont, size: 18 });
+    yPos -= 30;
+    
+    const colors = kit.colors || {};
+    for (const [name, value] of Object.entries(colors)) {
+        if (typeof value === 'string') {
+            const color = parseRgb(value);
+            page.drawRectangle({ x: 50, y: yPos, width: 20, height: 20, color: rgb(color.r, color.g, color.b) });
+            page.drawText(`${name}: ${value}`, { x: 80, y: yPos + 5, font, size: 12 });
+            yPos -= 30;
+        }
+    }
+    yPos -= 20;
+
+    page.drawText('Brand Voice', { x: 50, y: yPos, font: boldFont, size: 18 });
+    yPos -= 30;
+    const voice = kit.voice || {};
+    page.drawText(`Tone: ${voice.tone || 'N/A'}`, { x: 50, y: yPos, font, size: 12 });
+    yPos -= 20;
+    page.drawText(`Personality: ${voice.personality || 'N/A'}`, { x: 50, y: yPos, font, size: 12 });
+
+    const pdfBytes = await pdfDoc.save();
+    return pdfBytes;
+}
+
+async function generateSemanticBrandKit(crawlData: any) {
+    const prompt = `
+    Analyze the raw website data below to generate a comprehensive, semantic brand kit.
+    RAW DATA:
+    - Name: ${crawlData.title}
+    - Description: ${crawlData.description}
+    - URL: ${crawlData.url}
+    - Content Snippet: ${crawlData.raw_html ? crawlData.raw_html.substring(0, 2000) : ''}
+    TARGET JSON SCHEMA:
+    { "name": "string", "tagline": "string", "colors": { "primary": "string", "secondary": "string" }, "voice": { "tone": "string", "personality": "string" }, "design_tokens": [ { "token_key": "string", "token_type": "string", "token_value": "string" } ] }`;
     
     const response = await openai.chat.completions.create({
         model: 'gpt-4-turbo',
-        messages: [{ role: 'system', content: 'You are a design systems expert specializing in synthesizing pre-analyzed data into a semantic brand kit.' }, { role: 'user', content: prompt }],
+        messages: [{ role: 'system', content: 'You are a design systems expert.' }, { role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
     });
 
@@ -101,32 +112,47 @@ serve(async (req) => {
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
-    // --- GATHER ALL INCREMENTAL DATA ---
-    const { data: siteData, error: siteError } = await supabase.from('sites').select('*').eq('id', siteId).single();
-    if (siteError) throw siteError;
+    const { data: siteData, error: fetchError } = await supabase.from('sites').select('title, description, url, raw_html').eq('id', siteId).single();
+    if (fetchError) throw fetchError;
 
-    const { data: companyInfo, error: companyError } = await supabase.from('company_info').select('*').eq('site_id', siteId).single();
+    const { data: companyInfo, error: companyError } = await supabase.from('company_info').select('logo_url').eq('site_id', siteId).single();
     if (companyError) throw companyError;
 
-    const { data: designTokens, error: tokensError } = await supabase.from('design_tokens').select('*').eq('site_id', siteId);
-    if (tokensError) throw tokensError;
+    const brandKit = await generateSemanticBrandKit(siteData);
 
-    const { data: brandVoice, error: voiceError } = await supabase.from('brand_voice').select('*').eq('site_id', siteId).single();
-    if (voiceError) throw voiceError;
+    let logoBytes: Uint8Array | null = null;
+    if (companyInfo.logo_url) {
+        const response = await fetch(companyInfo.logo_url);
+        if (response.ok) {
+            logoBytes = new Uint8Array(await response.arrayBuffer());
+            const logoPath = `${siteId}-logo.png`;
+            await supabase.storage.from('logos').upload(logoPath, logoBytes, { contentType: 'image/png', upsert: true });
+            const { data: logoUrlData } = supabase.storage.from('logos').getPublicUrl(logoPath);
+            await supabase.from('company_info').update({ logo_url: logoUrlData.publicUrl }).eq('site_id', siteId);
+        }
+    }
 
-    // --- SYNTHESIZE INTO BRAND KIT ---
-    const brandKit = await generateSemanticBrandKit(siteData, companyInfo, designTokens || [], brandVoice, siteId);
+    await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
+    await supabase.from('brand_voice').insert({ site_id: siteId, summary: `Tone: ${brandKit.voice.tone}`, guidelines: brandKit.voice });
+    if (brandKit.design_tokens?.length > 0) {
+        await supabase.from('design_tokens').insert(brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId })));
+    }
 
-    // --- SAVE FINAL ARTIFACTS ---
+    const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url, logoBytes);
+    const pdfPath = `${siteId}-brand-profile.pdf`;
+    await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+    const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
+    
+    // Insert into the brand_kits table
     await supabase.from('brand_kits').insert({
       site_id: siteId,
       kit_data: brandKit,
-      pdf_url: '', // Placeholder, will be updated if PDF is generated
+      pdf_url: urlData.publicUrl,
     });
 
-    await supabase.from('sites').update({ status: 'ready' }).eq('id', siteId);
+    await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready' }).eq('id', siteId);
 
-    return new Response(JSON.stringify({ success: true, message: "Brand kit synthesized." }), {
+    return new Response(JSON.stringify({ success: true, pdfKitUrl: urlData.publicUrl }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200,
     });
   } catch (error) {
