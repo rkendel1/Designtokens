@@ -161,11 +161,16 @@ Synthesize all the raw data above into a single, structured JSON object that fol
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
+  let siteId: string | null = null;
+
   try {
-    const { siteId } = await req.json();
+    const body = await req.json();
+    siteId = body.siteId;
     if (!siteId) throw new Error('siteId is required');
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
+
+    await supabase.from('sites').update({ status: 'processing', status_message: 'Starting brand kit generation.' }).eq('id', siteId);
 
     const { data: siteData, error: fetchError } = await supabase.from('sites').select('title, description, url, raw_html, raw_design_tokens, raw_css_variables, raw_text_content').eq('id', siteId).single();
     if (fetchError) throw fetchError;
@@ -247,13 +252,17 @@ serve(async (req) => {
       pdf_url: urlData.publicUrl,
     });
 
-    await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready' }).eq('id', siteId);
+    await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready', status_message: 'Brand kit generated successfully.' }).eq('id', siteId);
 
     return new Response(JSON.stringify({ success: true, pdfKitUrl: urlData.publicUrl }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200,
     });
   } catch (error) {
     console.error('Edge Function Error:', error);
+    if (siteId) {
+        const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
+        await supabase.from('sites').update({ status: 'failed', status_message: error.message }).eq('id', siteId);
+    }
     return new Response(JSON.stringify({ error: error.message }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500,
     });

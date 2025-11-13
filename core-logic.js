@@ -12,9 +12,15 @@ async function processCrawl(url) {
     const siteId = savedData.siteId;
 
     // 3. Asynchronously invoke the Edge Function to process the brand kit
-    // We don't wait for the result, allowing for a fast response.
+    // We don't wait for the function to complete, but we handle invocation errors
     supabase.functions.invoke('process-brand-kit', {
         body: { siteId },
+    }).then(({ error }) => {
+        if (error) {
+            console.error(`Failed to invoke 'process-brand-kit' for site ${siteId}:`, error);
+            // Update status to failed if invocation fails
+            store.updateSiteStatus(siteId, 'failed', `Function invocation error: ${error.message}`);
+        }
     });
 
     // 4. Return an immediate response indicating the process has started

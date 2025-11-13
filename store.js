@@ -26,6 +26,15 @@ class Store {
     return data;
   }
 
+  async updateSiteStatus(siteId, status, message = null) {
+    const { data, error } = await supabase
+      .from('sites')
+      .update({ status: status, status_message: message })
+      .eq('id', siteId);
+    if (error) throw error;
+    return data;
+  }
+
   async deleteSite(siteId) {
     const { error } = await supabase
       .from('sites')
