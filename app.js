@@ -1,12 +1,22 @@
 import 'dotenv/config';
-import Kernel from '@onkernel/sdk';
+import { Kernel } from '@onkernel/sdk';
 import { processCrawl } from './core-logic.js';
 
 const kernel = new Kernel();
 const app = kernel.app('designtokens-crawler');
 
 app.action('crawl', async (ctx, payload) => {
-  const { url } = payload;
+  let parsedPayload = payload;
+  // The payload from an invocation can be a string, so we need to parse it.
+  if (typeof payload === 'string') {
+    try {
+      parsedPayload = JSON.parse(payload);
+    } catch (e) {
+      throw new Error('Failed to parse payload. It must be a valid JSON string.');
+    }
+  }
+
+  const { url } = parsedPayload;
 
   if (!url) {
     throw new Error('URL is required in the payload.');
