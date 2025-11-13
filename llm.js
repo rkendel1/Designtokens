@@ -174,7 +174,23 @@ Return a JSON array:
       }
       const response = await this.callOpenAI(prompt, systemPrompt, responseFormat);
       if (responseFormat?.type === 'json_object') {
-        return JSON.parse(response);
+        try {
+          // First, try to parse the whole response.
+          return JSON.parse(response);
+        } catch (e) {
+          console.warn('LLM response was not valid JSON. Attempting to extract JSON from the response text.');
+          // If that fails, try to extract a JSON object from within the text.
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch && jsonMatch[0]) {
+            try {
+              return JSON.parse(jsonMatch[0]);
+            } catch (jsonError) {
+              console.error('Failed to parse extracted JSON from LLM response.', jsonError);
+              throw new Error('LLM returned a non-JSON response, and extraction failed.');
+            }
+          }
+          throw new Error('LLM returned a non-JSON response.');
+        }
       }
       return response;
     } else {
