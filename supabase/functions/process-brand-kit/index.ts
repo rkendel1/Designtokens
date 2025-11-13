@@ -143,6 +143,13 @@ serve(async (req) => {
     await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
     const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
     
+    // Insert into the brand_kits table
+    await supabase.from('brand_kits').insert({
+      site_id: siteId,
+      kit_data: brandKit,
+      pdf_url: urlData.publicUrl,
+    });
+
     await supabase.from('sites').update({ pdf_kit_url: urlData.publicUrl, status: 'ready' }).eq('id', siteId);
 
     return new Response(JSON.stringify({ success: true, pdfKitUrl: urlData.publicUrl }), {
