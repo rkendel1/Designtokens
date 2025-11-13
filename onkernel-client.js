@@ -1,4 +1,4 @@
-const { OnKernel } = require('onkernel');
+const { OnKernel } = require('@onkernel/cli');
 const config = require('./config');
 
 let onkernelClient = null;
