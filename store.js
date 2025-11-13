@@ -99,6 +99,30 @@ class Store {
         message: 'Raw data saved. Processing triggered.'
     };
   }
+
+  // --- Brand Kit Operations ---
+  async getBrandKitBySiteId(siteId) {
+    const { data, error } = await supabase
+      .from('brand_kits')
+      .select('kit_data, pdf_url, sites(url, status)')
+      .eq('site_id', siteId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error; // Ignore "not found"
+    if (!data) return null;
+
+    // The kit_data from the DB is the core of our response
+    const brandKit = data.kit_data || {};
+
+    // Assemble the final response object, ensuring brandId is the siteId
+    return {
+      ...brandKit,
+      brandId: siteId,
+      url: data.sites.url,
+      pdfKitUrl: data.pdf_url,
+      status: data.sites.status,
+    };
+  }
 }
 
 export default new Store();

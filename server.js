@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import NodeCache from 'node-cache';
 import config from './config.js';
 import crawler from './crawler.js';
+import store from './store.js';
 import { processCrawl } from './core-logic.js';
 import { fileURLToPath } from 'url';
 
@@ -50,6 +51,22 @@ app.post('/api/crawl', async (req, res) => {
   } catch (error) {
     console.error('Crawl error:', error);
     res.status(500).json({ error: 'Failed to crawl site', message: error.message });
+  }
+});
+
+app.get('/api/sites/:id/brand-kit', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const brandKit = await store.getBrandKitBySiteId(id);
+
+    if (brandKit) {
+      res.json(brandKit);
+    } else {
+      res.status(404).json({ error: 'Brand kit not found. It may still be processing or the site ID is invalid.' });
+    }
+  } catch (error) {
+    console.error('Error fetching brand kit:', error);
+    res.status(500).json({ error: 'Failed to fetch brand kit', message: error.message });
   }
 });
 

@@ -75,16 +75,69 @@ async function generateBrandProfilePDF(kit: any, siteUrl: string, logoBytes: Uin
     return pdfBytes;
 }
 
-async function generateSemanticBrandKit(crawlData: any) {
+async function generateSemanticBrandKit(crawlData: any, companyInfo: any, siteId: string) {
     const prompt = `
-    Analyze the raw website data below to generate a comprehensive, semantic brand kit.
-    RAW DATA:
-    - Name: ${crawlData.title}
-    - Description: ${crawlData.description}
-    - URL: ${crawlData.url}
-    - Content Snippet: ${crawlData.raw_html ? crawlData.raw_html.substring(0, 2000) : ''}
-    TARGET JSON SCHEMA:
-    { "name": "string", "tagline": "string", "colors": { "primary": "string", "secondary": "string" }, "voice": { "tone": "string", "personality": "string" }, "design_tokens": [ { "token_key": "string", "token_type": "string", "token_value": "string" } ] }`;
+    You are a world-class design systems expert. Your task is to analyze the following raw website data and generate a comprehensive, semantic brand kit in a specific JSON format.
+
+    **RAW WEBSITE DATA:**
+    1.  **Site ID:** ${siteId}
+    2.  **Company Info:**
+        - Name: ${crawlData.title}
+        - Description: ${crawlData.description}
+        - URL: ${crawlData.url}
+        - Logo URL: ${companyInfo.logo_url || 'Not found'}
+    3.  **Full Page HTML (for Token and Component Analysis):**
+        \`\`\`html
+        ${crawlData.raw_html ? crawlData.raw_html.substring(0, 8000) : ''}
+        \`\`\`
+
+    **YOUR TASK:**
+    Synthesize all the raw data above into a single, structured JSON object that follows this exact schema. Use your expertise to infer semantic meaning (e.g., which color is 'primary', which font size is 'lg', what the button styles are).
+
+    **IMPORTANT RULES:**
+    - The \`brandId\` field in the output MUST be the Site ID provided in the raw data.
+    - If a "Logo URL" is provided, use it for the "logo.url" field. If it is "Not found", leave "logo.url" as an empty string.
+    - All color values MUST be in a web-safe format like HEX ("#RRGGBB") or RGB ("rgb(r, g, b)"). Do NOT use modern color functions.
+    - Fill in all fields of the schema as completely as possible based on the provided HTML.
+
+    **TARGET JSON SCHEMA:**
+    \`\`\`json
+    {
+      "brandId": "${siteId}",
+      "url": "${crawlData.url}",
+      "name": "string",
+      "tagline": "string",
+      "logo": { "url": "string", "width": "number", "height": "number", "alt": "string" },
+      "colors": {
+        "primary": "string", "secondary": "string", "accent": "string", "background": "string", "surface": "string",
+        "success": "string", "warning": "string", "error": "string",
+        "text": { "primary": "string", "secondary": "string", "muted": "string", "onPrimary": "string" }
+      },
+      "typography": {
+        "fontFamily": { "heading": "string", "body": "string" },
+        "fontWeight": { "regular": 400, "medium": 500, "semibold": 600, "bold": 700 },
+        "fontSize": { "xs": "string", "sm": "string", "base": "string", "lg": "string", "xl": "string", "2xl": "string" },
+        "lineHeight": { "tight": 1.25, "normal": 1.5, "relaxed": 1.75 }
+      },
+      "spacing": { "4": "1rem", "8": "2rem" },
+      "radius": { "default": "0.25rem", "lg": "0.5rem", "full": "9999px" },
+      "shadows": { "default": "string", "md": "string", "lg": "string" },
+      "voice": {
+        "tone": "string", "personality": "string", "keyPhrases": ["string"],
+        "writingStyle": { "sentenceLength": "string", "activeVoice": "boolean", "jargonLevel": "string", "ctaStyle": "string" },
+        "examples": { "headline": "string", "subheadline": "string", "cta": "string" }
+      },
+      "components": {
+        "button": { "base": "string", "variants": { "primary": "string" }, "sizes": { "md": "string" } },
+        "card": { "base": "string" }
+      },
+      "cssVariables": "string",
+      "generatedAt": "string",
+      "pdfKitUrl": "string",
+      "status": "string"
+    }
+    \`\`\`
+    `;
     
     const response = await openai.chat.completions.create({
         model: 'gpt-4-turbo',
@@ -118,7 +171,7 @@ serve(async (req) => {
     const { data: companyInfo, error: companyError } = await supabase.from('company_info').select('logo_url').eq('site_id', siteId).single();
     if (companyError) throw companyError;
 
-    const brandKit = await generateSemanticBrandKit(siteData);
+    const brandKit = await generateSemanticBrandKit(siteData, companyInfo, siteId);
 
     let logoBytes: Uint8Array | null = null;
     if (companyInfo.logo_url) {
@@ -134,10 +187,7 @@ serve(async (req) => {
 
     await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
     await supabase.from('brand_voice').insert({ site_id: siteId, summary: `Tone: ${brandKit.voice.tone}`, guidelines: brandKit.voice });
-    if (brandKit.design_tokens?.length > 0) {
-        await supabase.from('design_tokens').insert(brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId })));
-    }
-
+    
     const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url, logoBytes);
     const pdfPath = `${siteId}-brand-profile.pdf`;
     await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
