@@ -1,5 +1,5 @@
-const supabase = require('./supabase-client');
-const llm = require('./llm');
+import supabase from './supabase-client.js';
+import llm from './llm.js';
 
 if (!supabase) {
   throw new Error("Supabase client failed to initialize. Check your .env file and SUPABASE_URL/SUPABASE_ANON_KEY variables.");
@@ -158,4 +158,4 @@ class Store {
   }
 }
 
-module.exports = new Store();
+export default new Store();

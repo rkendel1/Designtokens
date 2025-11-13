@@ -1,6 +1,6 @@
-require('dotenv').config();
-const Kernel = require('@onkernel/sdk');
-const { processCrawl } = require('./core-logic');
+import 'dotenv/config';
+import Kernel from '@onkernel/sdk';
+import { processCrawl } from './core-logic.js';
 
 const kernel = new Kernel();
 const app = kernel.app('designtokens-crawler');

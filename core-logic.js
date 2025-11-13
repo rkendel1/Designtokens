@@ -1,10 +1,10 @@
-const config = require('./config');
-const crawler = require('./crawler');
-const llm = require('./llm');
-const store = require('./store');
-const supabase = require('./supabase-client');
-const supabaseService = require('./supabase-service-client');
-const generateBrandProfilePDF = require('./pdf-generator');
+import config from './config.js';
+import crawler from './crawler.js';
+import llm from './llm.js';
+import store from './store.js';
+import supabase from './supabase-client.js';
+import supabaseService from './supabase-service-client.js';
+import generateBrandProfilePDF from './pdf-generator.js';
 
 const isLlmConfigured = config.openai.apiKey && config.openai.apiKey.startsWith('sk-');
 
@@ -59,4 +59,4 @@ async function processCrawl(url) {
     };
 }
 
-module.exports = { processCrawl };
+export { processCrawl };

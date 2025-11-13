@@ -1,11 +1,11 @@
-const { chromium, firefox, webkit } = require('playwright');
-const { Kernel } = require('@onkernel/sdk');
-const cheerio = require('cheerio');
-const robotsParser = require('robots-parser');
-const axios = require('axios');
-const config = require('./config');
-const llm = require('./llm');
-const { extractColorPalette } = require('./image-processor');
+import { chromium, firefox, webkit } from 'playwright';
+import { Kernel } from '@onkernel/sdk';
+import cheerio from 'cheerio';
+import robotsParser from 'robots-parser';
+import axios from 'axios';
+import config from './config.js';
+import llm from './llm.js';
+import { extractColorPalette } from './image-processor.js';
 
 // User agent pool for rotation
 const USER_AGENTS = [
@@ -1146,4 +1146,4 @@ class Crawler {
   }
 }
 
-module.exports = new Crawler();
+export default new Crawler();

@@ -1,8 +1,8 @@
-const OpenAI = require('openai');
-const axios = require('axios');
-const config = require('./config');
-const { v4: uuidv4 } = require('uuid');
-const { isFeatureEnabled } = require('./onkernel-client');
+import OpenAI from 'openai';
+import axios from 'axios';
+import config from './config.js';
+import { v4 as uuidv4 } from 'uuid';
+import { isFeatureEnabled } from './onkernel-client.js';
 
 // Initialize OpenAI client only if API key is available
 let openai = null;
@@ -458,4 +458,4 @@ Synthesize all the raw data above into a single, structured JSON object that fol
   }
 }
 
-module.exports = new LLMService();
+export default new LLMService();

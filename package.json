@@ -1,14 +1,15 @@
 {
   "name": "designtokens",
   "version": "1.0.0",
+  "type": "module",
   "description": "OpenAI-powered site crawler and design token extractor",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "db:setup": "node scripts/init-db.js",
-    "test": "jest --coverage",
-    "test:watch": "jest --watch"
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch"
   },
   "keywords": [
     "design-tokens",

@@ -1,5 +1,5 @@
-const { Kernel } = require('@onkernel/sdk');
-const config = require('./config');
+import { Kernel } from '@onkernel/sdk';
+import config from './config.js';
 
 let onkernelClient = null;
 
@@ -37,6 +37,6 @@ async function isFeatureEnabled(key, context = {}, defaultValue = false) {
   }
 }
 
-module.exports = {
+export {
   isFeatureEnabled,
 };

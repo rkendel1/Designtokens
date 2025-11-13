@@ -1,6 +1,6 @@
 // Environment variables are now loaded by server.js or init-db.js
 
-module.exports = {
+export default {
   port: process.env.PORT || 3000,
   database: {
     connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/designtokens'

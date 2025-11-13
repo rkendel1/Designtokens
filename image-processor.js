@@ -1,6 +1,6 @@
-const axios = require('axios');
-const sharp = require('sharp');
-const ColorThief = require('colorthief');
+import axios from 'axios';
+import sharp from 'sharp';
+import ColorThief from 'colorthief';
 
 /**
  * Downloads an image from a URL and resizes it to standard icon sizes.
@@ -59,4 +59,4 @@ async function extractColorPalette(imageBuffer, k = 8) {
   }
 }
 
-module.exports = { resizeLogo, extractColorPalette };
+export { resizeLogo, extractColorPalette };

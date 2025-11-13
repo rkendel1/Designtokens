@@ -1,4 +1,4 @@
-const PDFDocument = require('pdfkit');
+import PDFDocument from 'pdfkit';
 
 async function generateBrandProfilePDF(kit) {
   return new Promise((resolve, reject) => {
@@ -98,4 +98,4 @@ async function generateBrandProfilePDF(kit) {
   });
 }
 
-module.exports = generateBrandProfilePDF;
+export default generateBrandProfilePDF;

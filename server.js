@@ -1,12 +1,13 @@
-require('dotenv').config(); // Load environment variables first
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const NodeCache = require('node-cache');
-const config = require('./config');
-const crawler = require('./crawler');
-const { processCrawl } = require('./core-logic');
+import 'dotenv/config'; // Load environment variables first
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import NodeCache from 'node-cache';
+import config from './config.js';
+import crawler from './crawler.js';
+import { processCrawl } from './core-logic.js';
+import { fileURLToPath } from 'url';
 
 const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
@@ -57,7 +58,8 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong!' });
 });
 
-if (process.env.NODE_ENV !== 'test' && require.main === module) {
+const __filename = fileURLToPath(import.meta.url);
+if (process.env.NODE_ENV !== 'test' && process.argv[1] === __filename) {
   const PORT = config.port;
   const server = app.listen(PORT, () => {
     console.log(`Design Tokens API server running on port ${PORT}`);
@@ -75,4 +77,4 @@ if (process.env.NODE_ENV !== 'test' && require.main === module) {
   process.on('SIGINT', shutdown);
 }
 
-module.exports = app;
+export default app;
