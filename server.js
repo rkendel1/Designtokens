@@ -6,17 +6,10 @@ const rateLimit = require('express-rate-limit');
 const NodeCache = require('node-cache');
 const config = require('./config');
 const crawler = require('./crawler');
-const llm = require('./llm');
-const store = require('./store'); // Use the refactored store
-const supabase = require('./supabase-client');
-const supabaseService = require('./supabase-service-client');
-const generateBrandProfilePDF = require('./pdf-generator');
-const { v4: uuidv4 } = require('uuid');
+const { processCrawl } = require('./core-logic');
 
 const app = express();
 const cache = new NodeCache({ stdTTL: config.cache.ttl });
-
-const isLlmConfigured = config.openai.apiKey && config.openai.apiKey.startsWith('sk-');
 
 app.use(helmet());
 app.use(cors());
@@ -48,57 +41,7 @@ app.post('/api/crawl', async (req, res) => {
       if (cached) return res.json({ ...cached, fromCache: true });
     }
 
-    const crawlData = await crawler.crawlDeep(url, { takeScreenshot: true }) || {};
-    crawlData.structuredData = crawlData.structuredData || {};
-    crawlData.meta = crawlData.meta || {};
-    crawlData.textContent = crawlData.textContent || "";
-    crawlData.designTokens = crawlData.designTokens || {};
-
-    if (!isLlmConfigured) {
-      console.warn('LLM not configured. Skipping AI synthesis and returning raw crawl data.');
-      const rawResponse = {
-        site: { url: crawlData.url, domain: crawlData.domain, title: crawlData.meta.title, description: crawlData.meta.description },
-        companyInfo: crawlData.structuredData,
-        designTokens: crawlData.designTokens,
-        message: 'LLM not configured. This is raw data without AI analysis.'
-      };
-      cache.set(cacheKey, rawResponse);
-      return res.json(rawResponse);
-    }
-
-    const semanticBrandKit = await llm.generateSemanticBrandKit(crawlData);
-    if (!semanticBrandKit) {
-      return res.status(500).json({ error: 'Failed to generate brand kit from LLM.' });
-    }
-
-    // --- Save all data to the structured tables ---
-    const savedData = await store.saveCrawlResult(crawlData, semanticBrandKit);
-    const brandId = savedData.siteId; // Use the site ID as the brandId
-
-    let pdfUrl = null;
-    if (supabaseService) {
-      try {
-        const pdfBuffer = await generateBrandProfilePDF({ ...savedData, url, brandId });
-        const pdfPath = `${brandId}.pdf`;
-        const { error: uploadError } = await supabaseService.storage
-          .from('brand-kits')
-          .upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
-        if (uploadError) throw uploadError;
-        const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
-        pdfUrl = urlData.publicUrl;
-      } catch (error) {
-        console.error('Supabase PDF upload error:', error);
-      }
-    }
-
-    const finalResponse = {
-      ...savedData,
-      brandId: brandId,
-      url: crawlData.url,
-      generatedAt: new Date().toISOString(),
-      pdfKitUrl: pdfUrl,
-      status: "ready"
-    };
+    const finalResponse = await processCrawl(url);
 
     cache.set(cacheKey, finalResponse);
     res.json(finalResponse);
