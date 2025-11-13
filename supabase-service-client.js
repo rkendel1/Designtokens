@@ -6,7 +6,7 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 let supabaseService = null;
 if (!supabaseUrl || !supabaseServiceKey) {
-  console.warn('Supabase URL or Service Role Key not set. Please check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your environment variables.');
+  console.warn('Supabase service client not initialized. This is okay for most operations, but PDF uploads will fail. Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
 } else {
   supabaseService = createClient(supabaseUrl, supabaseServiceKey, {
     auth: {

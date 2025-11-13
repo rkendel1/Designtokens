@@ -1,9 +1,8 @@
 import supabase from './supabase-client.js';
 import llm from './llm.js';
 
-if (!supabase) {
-  throw new Error("Supabase client failed to initialize. Check your environment variables (e.g., NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY).");
-}
+// The check for a valid Supabase client is now handled directly in supabase-client.js,
+// so we can remove the check from this file to avoid a generic error.
 
 class Store {
   // --- Site Operations ---
