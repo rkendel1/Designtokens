@@ -1,6 +1,6 @@
 import { chromium, firefox, webkit } from 'playwright';
 import { Kernel } from '@onkernel/sdk';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
 import axios from 'axios';
 import config from './config.js';
