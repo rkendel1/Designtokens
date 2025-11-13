@@ -621,11 +621,18 @@ class Crawler {
       // Find logo
       let logoUrl = null;
       const logoSelectors = [
-        'img[src*="logo"]',
+        // High confidence selectors
         'img[alt*="logo" i]',
+        'img[src*="logo"]',
         'a[class*="logo"] img',
         '[class*="logo"] img',
+        // Medium confidence selectors for images inside header/banner links
+        'header a[href="/"] img',
+        '[role="banner"] a[href="/"] img',
+        'header > a > img',
+        // Lower confidence, but common
         'header img',
+        // SVG with a src attribute (not inline)
         'svg[aria-label*="logo" i]',
       ];
       for (const selector of logoSelectors) {

@@ -360,6 +360,7 @@ You are a world-class design systems expert. Your task is to analyze the followi
     - Name: ${crawlData.meta.title}
     - Description: ${crawlData.meta.description}
     - URL: ${crawlData.url}
+    - Logo URL: ${crawlData.logoUrl || 'Not found'}
 
 2.  **Raw Design Tokens:**
     - Colors: ${JSON.stringify((crawlData.designTokens.colors || []).slice(0, 20))}
@@ -387,6 +388,10 @@ You are a world-class design systems expert. Your task is to analyze the followi
 **YOUR TASK:**
 
 Synthesize all the raw data above into a single, structured JSON object that follows this exact schema. Use your expertise to infer semantic meaning (e.g., which color is 'primary', which font size is 'lg').
+
+**IMPORTANT RULES:**
+- If a "Logo URL" is provided in the raw data, you MUST use it for the "logo.url" field. If it is "Not found", leave "logo.url" as an empty string.
+- All color values in the output MUST be in a web-safe format like HEX (e.g., "#RRGGBB") or RGB (e.g., "rgb(r, g, b)"). Do NOT use modern color functions like oklch(), lch(), lab(), etc.
 
 **TARGET JSON SCHEMA:**
 \`\`\`json
