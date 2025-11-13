@@ -6,7 +6,7 @@ import { isFeatureEnabled } from './onkernel-client.js';
 
 // Initialize OpenAI client only if API key is available
 let openai = null;
-if (config.openai.apiKey && config.openai.apiKey.startsWith('sk-')) {
+if (config.openai.apiKey) {
   openai = new OpenAI({
     apiKey: config.openai.apiKey
   });

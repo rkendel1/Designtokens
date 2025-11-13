@@ -6,7 +6,7 @@ import supabase from './supabase-client.js';
 import supabaseService from './supabase-service-client.js';
 import generateBrandProfilePDF from './pdf-generator.js';
 
-const isLlmConfigured = config.openai.apiKey && config.openai.apiKey.startsWith('sk-');
+const isLlmConfigured = !!config.openai.apiKey;
 
 async function processCrawl(url) {
     const crawlData = await crawler.crawlDeep(url, { takeScreenshot: true }) || {};
