@@ -156,57 +156,6 @@ async function generateSemanticBrandKit(crawlData: any, companyInfo: any, siteId
     }
 }
 
-function transformBrandKitToDesignTokens(kit: any, siteId: string): any[] {
-    const tokens: any[] = [];
-
-    // Colors
-    if (kit.colors) {
-        for (const [key, value] of Object.entries(kit.colors)) {
-            if (typeof value === 'string') {
-                tokens.push({ site_id: siteId, token_key: `color.${key}`, token_type: 'color', token_value: value, source: 'llm-generated' });
-            } else if (typeof value === 'object' && value !== null) { // For colors.text
-                for (const [subKey, subValue] of Object.entries(value)) {
-                    if (typeof subValue === 'string') {
-                        tokens.push({ site_id: siteId, token_key: `color.${key}.${subKey}`, token_type: 'color', token_value: subValue, source: 'llm-generated' });
-                    }
-                }
-            }
-        }
-    }
-
-    // Typography
-    if (kit.typography) {
-        if (kit.typography.fontFamily) {
-            for (const [key, value] of Object.entries(kit.typography.fontFamily)) {
-                if (typeof value === 'string') {
-                    tokens.push({ site_id: siteId, token_key: `fontFamily.${key}`, token_type: 'fontFamily', token_value: value, source: 'llm-generated' });
-                }
-            }
-        }
-        if (kit.typography.fontSize) {
-            for (const [key, value] of Object.entries(kit.typography.fontSize)) {
-                if (typeof value === 'string') {
-                    tokens.push({ site_id: siteId, token_key: `fontSize.${key}`, token_type: 'fontSize', token_value: value, source: 'llm-generated' });
-                }
-            }
-        }
-    }
-
-    // Spacing, Radius, Shadows
-    const simpleCategories = { spacing: 'spacing', radius: 'radius', shadows: 'shadow' };
-    for (const [category, tokenType] of Object.entries(simpleCategories)) {
-        if (kit[category]) {
-            for (const [key, value] of Object.entries(kit[category])) {
-                if (typeof value === 'string') {
-                    tokens.push({ site_id: siteId, token_key: `${category}.${key}`, token_type: tokenType, token_value: value, source: 'llm-generated' });
-                }
-            }
-        }
-    }
-
-    return tokens;
-}
-
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
@@ -239,20 +188,12 @@ serve(async (req) => {
     await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
     await supabase.from('brand_voice').insert({ site_id: siteId, summary: `Tone: ${brandKit.voice.tone}`, guidelines: brandKit.voice });
     
-    // Transform and insert design tokens
-    const designTokens = transformBrandKitToDesignTokens(brandKit, siteId);
-    if (designTokens.length > 0) {
-        const { error: tokenError } = await supabase.from('design_tokens').insert(designTokens);
-        if (tokenError) {
-            console.error('Error inserting design tokens:', tokenError);
-        }
-    }
-
     const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url, logoBytes);
     const pdfPath = `${siteId}-brand-profile.pdf`;
     await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
     const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
     
+    // Insert into the brand_kits table
     await supabase.from('brand_kits').insert({
       site_id: siteId,
       kit_data: brandKit,
