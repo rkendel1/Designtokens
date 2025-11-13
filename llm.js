@@ -2,6 +2,7 @@ const OpenAI = require('openai');
 const axios = require('axios');
 const config = require('./config');
 const { v4: uuidv4 } = require('uuid');
+const { isFeatureEnabled } = require('./onkernel-client');
 
 // Initialize OpenAI client only if API key is available
 let openai = null;
@@ -148,7 +149,8 @@ Return a JSON array:
 
   // Generic LLM call - switches based on provider
   async callLLM(prompt, systemPrompt = '', responseFormat = null) {
-    const provider = config.llm.provider;
+    const useOllamaFlag = await isFeatureEnabled('use-ollama-provider', {}, false);
+    const provider = useOllamaFlag ? 'ollama' : config.llm.provider;
 
     if (provider === 'ollama') {
       const response = await this.callOllama(prompt, systemPrompt);

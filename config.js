@@ -8,6 +8,9 @@ module.exports = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY
   },
+  onkernel: {
+    apiKey: process.env.ONKERNEL_API_KEY
+  },
   llm: {
     provider: process.env.LLM_PROVIDER || 'openai', // 'openai' or 'ollama'
     ollamaUrl: process.env.OLLAMA_URL || 'http://localhost:11434',
