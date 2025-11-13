@@ -75,20 +75,75 @@ async function generateBrandProfilePDF(kit: any, siteUrl: string, logoBytes: Uin
     return pdfBytes;
 }
 
-async function generateSemanticBrandKit(crawlData: any) {
+async function generateSemanticBrandKit(crawlData: any, logoUrl: string | null) {
     const prompt = `
-    Analyze the raw website data below to generate a comprehensive, semantic brand kit.
-    RAW DATA:
+You are a world-class design systems expert. Your task is to analyze the following raw website data and generate a comprehensive, semantic brand kit in a specific JSON format.
+
+**RAW WEBSITE DATA:**
+
+1.  **Company Info:**
     - Name: ${crawlData.title}
     - Description: ${crawlData.description}
     - URL: ${crawlData.url}
-    - Content Snippet: ${crawlData.raw_html ? crawlData.raw_html.substring(0, 2000) : ''}
-    TARGET JSON SCHEMA:
-    { "name": "string", "tagline": "string", "colors": { "primary": "string", "secondary": "string" }, "voice": { "tone": "string", "personality": "string" }, "design_tokens": [ { "token_key": "string", "token_type": "string", "token_value": "string" } ] }`;
+    - Logo URL: ${logoUrl || 'Not found'}
+
+2.  **Raw Design Tokens:**
+    - Colors: ${JSON.stringify((crawlData.raw_design_tokens?.colors || []).slice(0, 20))}
+    - Font Families: ${JSON.stringify((crawlData.raw_design_tokens?.fonts || []).slice(0, 10))}
+    - Font Sizes: ${JSON.stringify((crawlData.raw_design_tokens?.fontSizes || []).slice(0, 20))}
+    - Spacing: ${JSON.stringify((crawlData.raw_design_tokens?.spacing || []).slice(0, 20))}
+    - Border Radius: ${JSON.stringify((crawlData.raw_design_tokens?.borderRadius || []).slice(0, 10))}
+    - Shadows: ${JSON.stringify((crawlData.raw_design_tokens?.shadows || []).slice(0, 10))}
+
+3.  **Raw CSS Variables:**
+    \`\`\`json
+    ${JSON.stringify(crawlData.raw_css_variables || {})}
+    \`\`\`
+
+4.  **Brand Voice Analysis (Initial):**
+    - Content Snippet: ${(crawlData.raw_text_content || '').substring(0, 1500)}
+
+5.  **HTML Snippet (for component analysis):**
+    \`\`\`html
+    ${(crawlData.raw_html || '').substring(0, 3000)}
+    \`\`\`
+
+**YOUR TASK:**
+
+Synthesize all the raw data above into a single, structured JSON object that follows this exact schema. Use your expertise to infer semantic meaning (e.g., which color is 'primary', which font size is 'lg').
+
+**IMPORTANT RULES:**
+- If a "Logo URL" is provided in the raw data, you MUST use it for the "logo.url" field. If it is "Not found", leave "logo.url" as an empty string.
+- All color values in the output MUST be in a web-safe format like HEX (e.g., "#RRGGBB") or RGB (e.g., "rgb(r, g, b)").
+
+**TARGET JSON SCHEMA:**
+\`\`\`json
+{
+  "name": "string",
+  "tagline": "string",
+  "logo": { "url": "string" },
+  "colors": {
+    "primary": "string", "secondary": "string", "accent": "string", "background": "string", "surface": "string", "success": "string", "warning": "string", "error": "string",
+    "text": { "primary": "string", "secondary": "string", "muted": "string", "onPrimary": "string" }
+  },
+  "typography": {
+    "fontFamily": { "heading": "string", "body": "string" },
+    "fontSize": { "xs": "string", "sm": "string", "base": "string", "lg": "string", "xl": "string", "2xl": "string" }
+  },
+  "spacing": { "4": "1rem", "8": "2rem" },
+  "radius": { "default": "0.25rem", "lg": "0.5rem", "full": "9999px" },
+  "shadows": { "default": "string", "md": "string", "lg": "string" },
+  "voice": {
+    "tone": "string", "personality": "string",
+    "examples": { "headline": "string", "cta": "string" }
+  }
+}
+\`\`\`
+`;
     
     const response = await openai.chat.completions.create({
         model: 'gpt-4-turbo',
-        messages: [{ role: 'system', content: 'You are a design systems expert.' }, { role: 'user', content: prompt }],
+        messages: [{ role: 'system', content: 'You are a world-class design systems expert. Your task is to analyze raw website data and generate a comprehensive, semantic brand kit in a specific JSON format.' }, { role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
     });
 
@@ -112,13 +167,13 @@ serve(async (req) => {
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
 
-    const { data: siteData, error: fetchError } = await supabase.from('sites').select('title, description, url, raw_html').eq('id', siteId).single();
+    const { data: siteData, error: fetchError } = await supabase.from('sites').select('title, description, url, raw_html, raw_design_tokens, raw_css_variables, raw_text_content').eq('id', siteId).single();
     if (fetchError) throw fetchError;
 
     const { data: companyInfo, error: companyError } = await supabase.from('company_info').select('logo_url').eq('site_id', siteId).single();
     if (companyError) throw companyError;
 
-    const brandKit = await generateSemanticBrandKit(siteData);
+    const brandKit = await generateSemanticBrandKit(siteData, companyInfo.logo_url);
 
     let logoBytes: Uint8Array | null = null;
     if (companyInfo.logo_url) {
@@ -134,8 +189,51 @@ serve(async (req) => {
 
     await supabase.from('company_info').update({ company_name: brandKit.name }).eq('site_id', siteId);
     await supabase.from('brand_voice').insert({ site_id: siteId, summary: `Tone: ${brandKit.voice.tone}`, guidelines: brandKit.voice });
-    if (brandKit.design_tokens?.length > 0) {
-        await supabase.from('design_tokens').insert(brandKit.design_tokens.map((token: any) => ({ ...token, site_id: siteId })));
+    
+    const designTokensToInsert: { token_key: string; token_type: string; token_value: any; }[] = [];
+    const { colors, typography, spacing, radius, shadows } = brandKit;
+
+    if (colors) {
+        for (const [key, value] of Object.entries(colors)) {
+            if (typeof value === 'string') {
+                designTokensToInsert.push({ token_key: `color.${key}`, token_type: 'color', token_value: value });
+            } else if (value && typeof value === 'object') {
+                for (const [subKey, subValue] of Object.entries(value as object)) {
+                    if (typeof subValue === 'string') {
+                        designTokensToInsert.push({ token_key: `color.${key}.${subKey}`, token_type: 'color', token_value: subValue });
+                    }
+                }
+            }
+        }
+    }
+    if (typography?.fontFamily) {
+        for (const [key, value] of Object.entries(typography.fontFamily)) {
+            if (typeof value === 'string') designTokensToInsert.push({ token_key: `fontFamily.${key}`, token_type: 'typography', token_value: value });
+        }
+    }
+    if (typography?.fontSize) {
+        for (const [key, value] of Object.entries(typography.fontSize)) {
+            if (typeof value === 'string') designTokensToInsert.push({ token_key: `fontSize.${key}`, token_type: 'typography', token_value: value });
+        }
+    }
+    if (spacing) {
+        for (const [key, value] of Object.entries(spacing)) {
+            if (typeof value === 'string') designTokensToInsert.push({ token_key: `spacing.${key}`, token_type: 'spacing', token_value: value });
+        }
+    }
+    if (radius) {
+        for (const [key, value] of Object.entries(radius)) {
+            if (typeof value === 'string') designTokensToInsert.push({ token_key: `radius.${key}`, token_type: 'border', token_value: value });
+        }
+    }
+    if (shadows) {
+        for (const [key, value] of Object.entries(shadows)) {
+            if (typeof value === 'string') designTokensToInsert.push({ token_key: `shadow.${key}`, token_type: 'shadow', token_value: value });
+        }
+    }
+
+    if (designTokensToInsert.length > 0) {
+        await supabase.from('design_tokens').insert(designTokensToInsert.map((token: any) => ({ ...token, site_id: siteId })));
     }
 
     const pdfBuffer = await generateBrandProfilePDF(brandKit, siteData.url, logoBytes);
@@ -143,7 +241,6 @@ serve(async (req) => {
     await supabase.storage.from('brand-kits').upload(pdfPath, pdfBuffer, { contentType: 'application/pdf', upsert: true });
     const { data: urlData } = supabase.storage.from('brand-kits').getPublicUrl(pdfPath);
     
-    // Insert into the brand_kits table
     await supabase.from('brand_kits').insert({
       site_id: siteId,
       kit_data: brandKit,

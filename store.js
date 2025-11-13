@@ -79,6 +79,9 @@ class Store {
       description: crawlData.meta.description,
       raw_html: crawlData.html,
       screenshot: crawlData.screenshot,
+      raw_design_tokens: crawlData.designTokens,
+      raw_css_variables: crawlData.cssVariables,
+      raw_text_content: crawlData.textContent,
     });
     const siteId = site.id;
 
