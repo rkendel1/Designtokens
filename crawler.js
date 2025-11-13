@@ -1,4 +1,5 @@
 const { chromium, firefox, webkit } = require('playwright');
+const { Kernel } = require('@onkernel/sdk');
 const cheerio = require('cheerio');
 const robotsParser = require('robots-parser');
 const axios = require('axios');
@@ -32,6 +33,15 @@ class Crawler {
     this.browserType = null;
     this.userAgentIndex = 0;
     this.llm = llm;
+    this.kernel = null;
+    if (config.onkernel.apiKey) {
+      try {
+        this.kernel = new Kernel({ apiKey: config.onkernel.apiKey });
+        console.log('OnKernel Kernel for browsers initialized.');
+      } catch (error) {
+        console.error('Failed to initialize OnKernel Kernel for browsers:', error);
+      }
+    }
   }
 
   // Get random user agent
@@ -58,6 +68,28 @@ class Crawler {
 
   // Launch appropriate browser
   async launchBrowser(type) {
+    // If OnKernel is configured and we are asked for a chromium browser, use OnKernel.
+    if (this.kernel && type === 'chromium') {
+      try {
+        console.log('Launching browser via OnKernel...');
+        const kernelBrowser = await this.kernel.browsers.create();
+        const browser = await chromium.connectOverCDP(kernelBrowser.cdp_ws_url);
+        // Store kernelBrowser details for later cleanup
+        browser.kernelBrowser = kernelBrowser;
+        return browser;
+      } catch (error) {
+        console.error('Failed to launch browser with OnKernel, falling back to local Playwright.', error);
+        // Fall through to local launch
+      }
+    }
+
+    // Fallback for other browsers, or if OnKernel is not configured, or if OnKernel fails.
+    if (this.kernel && type !== 'chromium') {
+      console.warn(`OnKernel browser launch is currently only supported for Chromium. Launching ${type} locally.`);
+    } else if (!this.kernel) {
+      console.log('OnKernel not configured. Launching browser locally.');
+    }
+    
     const browserMap = {
       chromium: chromium,
       firefox: firefox,
@@ -81,6 +113,14 @@ class Crawler {
 
   async close() {
     if (this.browser) {
+      if (this.browser.kernelBrowser && this.kernel) {
+        try {
+          console.log('Destroying OnKernel browser session...');
+          await this.kernel.browsers.destroy(this.browser.kernelBrowser.id);
+        } catch (error) {
+          console.error('Failed to destroy OnKernel browser session:', error);
+        }
+      }
       await this.browser.close();
       this.browser = null;
       this.browserType = null;

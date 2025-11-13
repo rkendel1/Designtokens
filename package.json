@@ -19,6 +19,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@onkernel/sdk": "0.10.3",
     "@supabase/supabase-js": "^2.81.1",
     "axios": "^1.6.2",
     "cheerio": "^1.0.0-rc.12",
@@ -35,8 +36,7 @@
     "playwright": "^1.40.1",
     "robots-parser": "^3.0.1",
     "sharp": "0.33.3",
-    "uuid": "^9.0.1",
-    "onkernel": "0.10.3"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",

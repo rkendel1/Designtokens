@@ -1,11 +1,11 @@
-const { OnKernel } = require('onkernel');
+const { Kernel } = require('@onkernel/sdk');
 const config = require('./config');
 
 let onkernelClient = null;
 
 if (config.onkernel.apiKey) {
   try {
-    onkernelClient = new OnKernel({
+    onkernelClient = new Kernel({
       apiKey: config.onkernel.apiKey,
     });
     console.log('OnKernel client initialized successfully.');
