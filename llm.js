@@ -134,7 +134,7 @@ Return a JSON array:
     ];
 
     const options = {
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4-turbo',
       messages,
       temperature: 0.3
     };
