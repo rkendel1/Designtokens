@@ -43,16 +43,6 @@ class Store {
     return data;
   }
 
-  async createDesignTokensBulk(siteId, tokens) {
-    if (!tokens || tokens.length === 0) return null;
-    const tokensWithSiteId = tokens.map(token => ({ site_id: siteId, ...token }));
-    const { data, error } = await supabase
-      .from('design_tokens')
-      .insert(tokensWithSiteId);
-    if (error) throw error;
-    return data;
-  }
-
   async createProductsBulk(siteId, products) {
     if (!products || products.length === 0) return null;
     
@@ -75,30 +65,13 @@ class Store {
     return data;
   }
 
-  async createBrandVoice(siteId, voiceData, textContent) {
-    // Generate embedding for the brand voice summary
-    const embedding = await llm.generateEmbedding(textContent);
-    const { data, error } = await supabase
-      .from('brand_voice')
-      .insert({
-        site_id: siteId,
-        summary: voiceData.summary,
-        guidelines: voiceData.guidelines,
-        embedding: embedding,
-      });
-    if (error) throw error;
-    return data;
-  }
-
-  // --- Orchestration ---
-  async saveCrawlResult(crawlData, semanticBrandKit) {
-    // Check for and delete existing site data to prevent unique constraint violation
+  // --- New Simplified Orchestration ---
+  async saveRawCrawlData(crawlData) {
     const existingSite = await this.getSiteByUrl(crawlData.url);
     if (existingSite) {
       await this.deleteSite(existingSite.id);
     }
 
-    // 1. Create Site (always happens)
     const site = await this.createSite({
       url: crawlData.url,
       domain: crawlData.domain,
@@ -109,72 +82,21 @@ class Store {
     });
     const siteId = site.id;
 
-    // Always save products from raw crawl data
+    // Save basic info that doesn't require AI
+    await this.createCompanyInfo(siteId, {
+        company_name: crawlData.meta.title,
+        contact_emails: crawlData.structuredData.emails,
+        contact_phones: crawlData.structuredData.phones,
+        structured_json: crawlData.structuredData,
+    });
+
     await this.createProductsBulk(siteId, crawlData.structuredData.products);
 
-    // If we have the semantic kit from the LLM, save the structured, AI-analyzed data.
-    if (semanticBrandKit) {
-        await this.createCompanyInfo(siteId, {
-            company_name: semanticBrandKit.name,
-            contact_emails: crawlData.structuredData.emails,
-            contact_phones: crawlData.structuredData.phones,
-            structured_json: crawlData.structuredData,
-        });
-
-        const tokensToInsert = [];
-        const tokenCategories = ['colors', 'typography', 'spacing', 'radius', 'shadows'];
-        for (const category of tokenCategories) {
-            if (semanticBrandKit[category]) {
-                for (const [key, value] of Object.entries(semanticBrandKit[category])) {
-                    if (typeof value === 'string') {
-                        tokensToInsert.push({ token_key: key, token_type: category, token_value: value, source: 'llm-normalized' });
-                    } else if (typeof value === 'object' && value !== null) {
-                        for (const [subKey, subValue] of Object.entries(value)) {
-                           tokensToInsert.push({ token_key: `${key}.${subKey}`, token_type: category, token_value: subValue.toString(), source: 'llm-normalized' });
-                        }
-                    }
-                }
-            }
-        }
-        await this.createDesignTokensBulk(siteId, tokensToInsert);
-
-        if (semanticBrandKit.voice) {
-            await this.createBrandVoice(siteId, semanticBrandKit.voice, crawlData.textContent);
-        }
-        
-        return { siteId, ...semanticBrandKit };
-    } else {
-        // Fallback: Save raw data if LLM is not available or failed.
-        await this.createCompanyInfo(siteId, {
-            company_name: crawlData.meta.title, // Use site title as fallback
-            contact_emails: crawlData.structuredData.emails,
-            contact_phones: crawlData.structuredData.phones,
-            structured_json: crawlData.structuredData,
-        });
-
-        const rawTokens = crawlData.designTokens || {};
-        const tokensToInsert = [];
-        const tokenTypes = ['colors', 'fonts', 'fontSizes', 'spacing', 'borderRadius', 'shadows'];
-        for (const tokenType of tokenTypes) {
-            if (Array.isArray(rawTokens[tokenType])) {
-                rawTokens[tokenType].forEach((value, index) => {
-                    tokensToInsert.push({ token_key: `${tokenType}_${index}`, token_type: tokenType, token_value: String(value), source: 'raw-crawl' });
-                });
-            }
-        }
-        if (rawTokens.cssVariables && typeof rawTokens.cssVariables === 'object') {
-            Object.entries(rawTokens.cssVariables).forEach(([key, value]) => {
-                tokensToInsert.push({ token_key: key, token_type: 'css-variable', token_value: String(value), source: 'raw-crawl' });
-            });
-        }
-        await this.createDesignTokensBulk(siteId, tokensToInsert);
-
-        return { 
-            siteId, 
-            name: crawlData.meta.title,
-            message: 'LLM not configured or failed. Raw data has been saved.'
-        };
-    }
+    return { 
+        siteId, 
+        name: crawlData.meta.title,
+        message: 'Raw data saved. Processing triggered.'
+    };
   }
 }
 
