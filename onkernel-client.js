@@ -1,4 +1,4 @@
-const { OnKernel } = require('@onkernel/js-sdk');
+const { OnKernel } = require('onkernel');
 const config = require('./config');
 
 let onkernelClient = null;
