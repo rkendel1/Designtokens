@@ -9,7 +9,7 @@ export default {
     apiKey: process.env.OPENAI_API_KEY
   },
   onkernel: {
-    apiKey: process.env.ONKERNEL_API_KEY
+    apiKey: process.env.KERNEL_API_KEY
   },
   llm: {
     provider: process.env.LLM_PROVIDER || 'openai', // 'openai' or 'ollama'

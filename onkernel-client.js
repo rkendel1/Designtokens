@@ -13,7 +13,7 @@ if (config.onkernel.apiKey) {
     console.error('Failed to initialize OnKernel client:', error);
   }
 } else {
-  console.warn('ONKERNEL_API_KEY not found in environment. Feature flags will be disabled.');
+  console.warn('KERNEL_API_KEY not found in environment. Feature flags will be disabled.');
 }
 
 /**

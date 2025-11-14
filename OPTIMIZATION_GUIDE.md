@@ -31,7 +31,7 @@ This guide documents the comprehensive optimizations implemented in the design t
 ```bash
 # Enable OnKernel (default: true when API key is set)
 USE_ONKERNEL=true
-ONKERNEL_API_KEY=your_api_key_here
+KERNEL_API_KEY=your_api_key_here
 
 # Optional: Configure proxy
 PROXY_URL=http://proxy.example.com:8080
@@ -206,7 +206,7 @@ The pipeline provides detailed logging at each step:
 ## Best Practices
 
 ### 1. OnKernel Usage
-- Always set `ONKERNEL_API_KEY` when available for best performance
+- Always set `KERNEL_API_KEY` when available for best performance
 - OnKernel is automatically used for Chromium browsers
 - Falls back gracefully to local Playwright if OnKernel fails
 
