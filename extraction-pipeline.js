@@ -1,4 +1,4 @@
-import supabase from './supabase-client.js';
+import supabase from './supabase-service-client.js';
 import crawler from './crawler.js';
 import store from './store.js';
 import llm from './llm.js';

@@ -1,6 +1,6 @@
 import config from './config.js';
 import extractionPipeline from './extraction-pipeline.js';
-import supabase from './supabase-client.js';
+import supabase from './supabase-service-client.js';
 
 /**
  * Process a crawl request using the modular extraction pipeline

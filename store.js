@@ -1,4 +1,4 @@
-import supabase from './supabase-client.js';
+import supabase from './supabase-service-client.js';
 import llm from './llm.js';
 
 // The check for a valid Supabase client is now handled directly in supabase-client.js,
