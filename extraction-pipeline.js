@@ -4,6 +4,7 @@ import store from './store.js';
 import llm from './llm.js';
 import { extractColorPalette } from './image-processor.js';
 import config from './config.js';
+import browserManager from './browser-manager.js';
 
 /**
  * Extraction Pipeline Manager
@@ -15,16 +16,19 @@ import config from './config.js';
 class ExtractionPipeline {
   constructor() {
     this.steps = [
-      { type: 'url_validation', order: 1, handler: this.validateUrl.bind(this) },
-      { type: 'basic_crawl', order: 2, handler: this.performBasicCrawl.bind(this) },
-      { type: 'screenshot_capture', order: 3, handler: this.captureScreenshot.bind(this) },
-      { type: 'css_extraction', order: 4, handler: this.extractCSS.bind(this) },
-      { type: 'design_token_extraction', order: 5, handler: this.extractDesignTokens.bind(this) },
-      { type: 'structured_data_extraction', order: 6, handler: this.extractStructuredData.bind(this) },
-      { type: 'llm_enrichment', order: 7, handler: this.performLLMEnrichment.bind(this) },
-      { type: 'brand_kit_generation', order: 8, handler: this.generateBrandKit.bind(this) },
-      { type: 'pdf_generation', order: 9, handler: this.generatePDF.bind(this) }
+      { type: 'url_validation', order: 1, handler: this.validateUrl.bind(this), requiresBrowser: false },
+      { type: 'basic_crawl', order: 2, handler: this.performBasicCrawl.bind(this), requiresBrowser: false },
+      { type: 'screenshot_capture', order: 3, handler: this.captureScreenshot.bind(this), requiresBrowser: true },
+      { type: 'css_extraction', order: 4, handler: this.extractCSS.bind(this), requiresBrowser: true },
+      { type: 'design_token_extraction', order: 5, handler: this.extractDesignTokens.bind(this), requiresBrowser: true },
+      { type: 'structured_data_extraction', order: 6, handler: this.extractStructuredData.bind(this), requiresBrowser: true },
+      { type: 'llm_enrichment', order: 7, handler: this.performLLMEnrichment.bind(this), requiresBrowser: false, canRunParallel: true },
+      { type: 'brand_kit_generation', order: 8, handler: this.generateBrandKit.bind(this), requiresBrowser: false },
+      { type: 'pdf_generation', order: 9, handler: this.generatePDF.bind(this), requiresBrowser: false }
     ];
+    
+    // Track active browser sessions per job
+    this.jobSessions = new Map();
   }
 
   /**
@@ -67,10 +71,11 @@ class ExtractionPipeline {
   }
 
   /**
-   * Execute the extraction pipeline
+   * Execute the extraction pipeline with optimized browser session management
    */
   async executePipeline(job) {
     let currentJob = job;
+    let browserSession = null;
     
     try {
       // Update job status to in_progress
@@ -85,27 +90,80 @@ class ExtractionPipeline {
       
       if (error) throw error;
       
-      // Execute each step
-      for (const step of steps) {
-        if (step.status === 'completed') {
-          console.log(`[Pipeline] Step ${step.step_type} already completed, skipping`);
-          continue;
+      // Group steps for potential parallel execution
+      const stepGroups = this.groupStepsForExecution(steps);
+      
+      // Execute step groups
+      for (const group of stepGroups) {
+        // Check if this group needs a browser session
+        const needsBrowser = group.some(step => {
+          const stepConfig = this.steps.find(s => s.type === step.step_type);
+          return stepConfig?.requiresBrowser;
+        });
+        
+        // Get or create browser session if needed
+        if (needsBrowser && !browserSession) {
+          browserSession = await this.getOrCreateBrowserSession(job.id, job.url);
         }
         
-        console.log(`[Pipeline] Executing step ${step.step_type}`);
-        
-        // Execute step with retry logic
-        const success = await this.executeStepWithRetry(job, step);
-        
-        if (!success) {
-          // Mark job as partial if a step fails after retries
-          await this.updateJobStatus(job.id, 'partial', `Step ${step.step_type} failed after retries`);
-          console.error(`[Pipeline] Job ${job.id} marked as partial due to step failure`);
-          break;
+        // Execute steps in parallel if possible
+        if (group.length > 1 && config.crawler.parallelSteps) {
+          console.log(`[Pipeline] Executing ${group.length} steps in parallel`);
+          const results = await Promise.allSettled(
+            group.map(step => this.executeStepWithRetry(job, step, browserSession))
+          );
+          
+          // Check results
+          for (let i = 0; i < results.length; i++) {
+            if (results[i].status === 'rejected' || !results[i].value) {
+              const failedStep = group[i];
+              await this.updateJobStatus(job.id, 'partial', `Step ${failedStep.step_type} failed`);
+              console.error(`[Pipeline] Job ${job.id} marked as partial due to step failure`);
+              
+              // Clean up browser session on failure
+              if (browserSession) {
+                await this.closeBrowserSession(job.id);
+              }
+              return await this.getJobResult(job.id);
+            }
+            
+            // Update job progress
+            currentJob = await this.incrementJobProgress(job.id);
+          }
+        } else {
+          // Execute steps sequentially
+          for (const step of group) {
+            if (step.status === 'completed') {
+              console.log(`[Pipeline] Step ${step.step_type} already completed, skipping`);
+              continue;
+            }
+            
+            console.log(`[Pipeline] Executing step ${step.step_type}`);
+            
+            // Execute step with retry logic
+            const success = await this.executeStepWithRetry(job, step, browserSession);
+            
+            if (!success) {
+              // Mark job as partial if a step fails after retries
+              await this.updateJobStatus(job.id, 'partial', `Step ${step.step_type} failed after retries`);
+              console.error(`[Pipeline] Job ${job.id} marked as partial due to step failure`);
+              
+              // Clean up browser session on failure
+              if (browserSession) {
+                await this.closeBrowserSession(job.id);
+              }
+              return await this.getJobResult(job.id);
+            }
+            
+            // Update job progress
+            currentJob = await this.incrementJobProgress(job.id);
+          }
         }
-        
-        // Update job progress
-        currentJob = await this.incrementJobProgress(job.id);
+      }
+      
+      // Clean up browser session after all browser-dependent steps
+      if (browserSession) {
+        await this.closeBrowserSession(job.id);
       }
       
       // Check if all steps completed
@@ -120,14 +178,121 @@ class ExtractionPipeline {
     } catch (error) {
       console.error(`[Pipeline] Pipeline execution failed for job ${job.id}:`, error);
       await this.updateJobStatus(job.id, 'failed', error.message);
+      
+      // Clean up browser session on error
+      if (browserSession) {
+        await this.closeBrowserSession(job.id);
+      }
+      
       throw error;
     }
   }
 
   /**
-   * Execute a single step with retry logic
+   * Group steps for optimized execution (sequential or parallel)
    */
-  async executeStepWithRetry(job, step) {
+  groupStepsForExecution(steps) {
+    const groups = [];
+    let currentGroup = [];
+    
+    for (const step of steps) {
+      const stepConfig = this.steps.find(s => s.type === step.step_type);
+      
+      if (stepConfig?.canRunParallel && currentGroup.length > 0) {
+        // This step can run in parallel with others
+        currentGroup.push(step);
+      } else {
+        // Start a new group
+        if (currentGroup.length > 0) {
+          groups.push(currentGroup);
+        }
+        currentGroup = [step];
+      }
+    }
+    
+    if (currentGroup.length > 0) {
+      groups.push(currentGroup);
+    }
+    
+    return groups;
+  }
+
+  /**
+   * Get or create a browser session for a job
+   */
+  async getOrCreateBrowserSession(jobId, url) {
+    // Check if we already have a session for this job
+    if (this.jobSessions.has(jobId)) {
+      const session = this.jobSessions.get(jobId);
+      console.log(`[Pipeline] Reusing browser session for job ${jobId}`);
+      return session;
+    }
+    
+    // Create new browser session
+    console.log(`[Pipeline] Creating browser session for job ${jobId}`);
+    const browserType = crawler.getBrowserType();
+    const { context, contextId } = await browserManager.getContext(browserType, {
+      userAgent: crawler.getRandomUserAgent()
+    });
+    
+    // Create a page and navigate to the URL
+    const { page, pageId } = await browserManager.getPage(contextId);
+    
+    // Navigate to the URL once and keep the page loaded
+    await page.goto(url, {
+      waitUntil: 'networkidle',
+      timeout: config.crawler.requestTimeout
+    });
+    
+    // Wait for content to stabilize
+    await page.waitForTimeout(2000);
+    
+    // Handle lazy loading once
+    await crawler.handleLazyLoad(page);
+    
+    const session = {
+      context,
+      contextId,
+      page,
+      pageId,
+      url,
+      browserType
+    };
+    
+    this.jobSessions.set(jobId, session);
+    
+    // Log browser manager stats
+    const stats = browserManager.getStats();
+    console.log(`[Pipeline] Browser pool stats:`, stats);
+    
+    return session;
+  }
+
+  /**
+   * Close browser session for a job
+   */
+  async closeBrowserSession(jobId) {
+    const session = this.jobSessions.get(jobId);
+    if (session) {
+      console.log(`[Pipeline] Closing browser session for job ${jobId}`);
+      
+      // Close the page but keep context for potential reuse
+      if (session.pageId) {
+        await browserManager.closePage(session.pageId);
+      }
+      
+      // Remove from job sessions
+      this.jobSessions.delete(jobId);
+      
+      // Note: We don't close the context here as BrowserManager will handle
+      // cleanup based on inactivity timeout, allowing for reuse
+    }
+  }
+
+  /**
+   * Execute a single step with retry logic and browser session support
+   */
+  async executeStepWithRetry(job, step, browserSession = null) {
     const maxRetries = step.max_retries || 3;
     let retryCount = step.retry_count || 0;
     
@@ -142,9 +307,9 @@ class ExtractionPipeline {
           throw new Error(`No handler found for step type: ${step.step_type}`);
         }
         
-        // Execute the step handler
+        // Execute the step handler with browser session if available
         const startTime = Date.now();
-        const result = await stepConfig.handler(job, step);
+        const result = await stepConfig.handler(job, step, browserSession);
         const duration = Date.now() - startTime;
         
         // Save step output and mark as completed
@@ -273,28 +438,19 @@ class ExtractionPipeline {
   }
 
   /**
-   * Step 3: Capture screenshot
+   * Step 3: Capture screenshot (optimized to use shared browser session)
    */
-  async captureScreenshot(job, step) {
-    const url = job.url;
-    
+  async captureScreenshot(job, step, browserSession) {
     try {
-      // Use deep crawl mode but only for screenshot
-      await crawler.init();
-      const context = await crawler.browser.newContext({
-        ignoreHTTPSErrors: true,
-        userAgent: crawler.getRandomUserAgent()
-      });
-      const page = await context.newPage();
+      // Use the shared browser session if available
+      const page = browserSession?.page;
       
-      // Navigate to the page
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: config.crawler.requestTimeout
-      });
+      if (!page) {
+        throw new Error('No browser session available for screenshot capture');
+      }
       
-      // Wait for content to load
-      await page.waitForTimeout(2000);
+      // Page is already loaded and lazy-loading handled
+      console.log('[Pipeline] Using existing page for screenshot capture');
       
       // Capture screenshot
       const screenshot = await page.screenshot({ 
@@ -319,12 +475,11 @@ class ExtractionPipeline {
         console.warn('Screenshot color extraction failed:', error);
       }
       
-      await context.close();
-      
       return {
         screenshot_captured: true,
         screenshot_size: screenshotBase64.length,
-        screenshot_colors: screenshotColors
+        screenshot_colors: screenshotColors,
+        session_reused: true
       };
       
     } catch (error) {
@@ -338,24 +493,18 @@ class ExtractionPipeline {
   }
 
   /**
-   * Step 4: Extract CSS
+   * Step 4: Extract CSS (optimized to use shared browser session)
    */
-  async extractCSS(job, step) {
-    const url = job.url;
-    
+  async extractCSS(job, step, browserSession) {
     try {
-      await crawler.init();
-      const context = await crawler.browser.newContext({
-        ignoreHTTPSErrors: true,
-        userAgent: crawler.getRandomUserAgent()
-      });
-      const page = await context.newPage();
+      // Use the shared browser session if available
+      const page = browserSession?.page;
       
-      // Navigate to the page
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: config.crawler.requestTimeout
-      });
+      if (!page) {
+        throw new Error('No browser session available for CSS extraction');
+      }
+      
+      console.log('[Pipeline] Using existing page for CSS extraction');
       
       // Extract CSS variables and stylesheet rules
       const cssData = await crawler.extractCSSVariables(page);
@@ -368,11 +517,10 @@ class ExtractionPipeline {
         })
         .eq('id', job.site_id);
       
-      await context.close();
-      
       return {
         css_variables_count: Object.keys(cssData.variables || {}).length,
-        stylesheet_rules: cssData.stylesheetRules
+        stylesheet_rules: cssData.stylesheetRules,
+        session_reused: true
       };
       
     } catch (error) {
@@ -385,28 +533,18 @@ class ExtractionPipeline {
   }
 
   /**
-   * Step 5: Extract design tokens
+   * Step 5: Extract design tokens (optimized to use shared browser session)
    */
-  async extractDesignTokens(job, step) {
-    const url = job.url;
-    
+  async extractDesignTokens(job, step, browserSession) {
     try {
-      await crawler.init();
-      const context = await crawler.browser.newContext({
-        ignoreHTTPSErrors: true,
-        userAgent: crawler.getRandomUserAgent()
-      });
-      const page = await context.newPage();
+      // Use the shared browser session if available
+      const page = browserSession?.page;
       
-      // Navigate to the page
-      await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: config.crawler.requestTimeout
-      });
+      if (!page) {
+        throw new Error('No browser session available for design token extraction');
+      }
       
-      // Wait for dynamic content
-      await page.waitForTimeout(2000);
-      await crawler.handleLazyLoad(page);
+      console.log('[Pipeline] Using existing page for design token extraction');
       
       // Extract computed styles
       const computedStyles = await crawler.extractComputedStyles(page);
@@ -491,13 +629,12 @@ class ExtractionPipeline {
         })
         .eq('id', job.site_id);
       
-      await context.close();
-      
       return {
         tokens_extracted: true,
         color_count: designTokens.colors.length,
         font_count: designTokens.fonts.length,
-        design_tokens: designTokens
+        design_tokens: designTokens,
+        session_reused: true
       };
       
     } catch (error) {
@@ -510,9 +647,9 @@ class ExtractionPipeline {
   }
 
   /**
-   * Step 6: Extract structured data
+   * Step 6: Extract structured data (optimized to use shared browser session)
    */
-  async extractStructuredData(job, step) {
+  async extractStructuredData(job, step, browserSession) {
     try {
       // Get HTML from sites table
       const { data: site } = await supabase
@@ -528,23 +665,17 @@ class ExtractionPipeline {
       // Extract structured data using Cheerio
       const structuredData = crawler.extractStructuredData(site.raw_html);
       
-      // Extract logo and hero image
-      await crawler.init();
-      const context = await crawler.browser.newContext({
-        ignoreHTTPSErrors: true,
-        userAgent: crawler.getRandomUserAgent()
-      });
-      const page = await context.newPage();
+      // Use the shared browser session if available
+      const page = browserSession?.page;
       
-      await page.goto(site.url, {
-        waitUntil: 'networkidle',
-        timeout: config.crawler.requestTimeout
-      });
+      if (!page) {
+        throw new Error('No browser session available for structured data extraction');
+      }
+      
+      console.log('[Pipeline] Using existing page for structured data extraction');
       
       const { logoUrl } = await crawler.extractLogoAndFavicon(page, site.url);
       const heroImageUrl = await crawler.extractHeroImage(page, site.url);
-      
-      await context.close();
       
       // Save company info
       const companyInfo = {
@@ -582,7 +713,8 @@ class ExtractionPipeline {
         phone_count: structuredData.phones?.length || 0,
         product_count: structuredData.products?.length || 0,
         logo_url: logoUrl,
-        hero_image_url: heroImageUrl
+        hero_image_url: heroImageUrl,
+        session_reused: true
       };
       
     } catch (error) {
@@ -591,9 +723,6 @@ class ExtractionPipeline {
         structured_data_extracted: false,
         error: error.message
       };
-    } finally {
-      // Close crawler after structured data extraction
-      await crawler.close();
     }
   }
 

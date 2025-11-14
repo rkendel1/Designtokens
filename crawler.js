@@ -1,11 +1,10 @@
-import { chromium, firefox, webkit } from 'playwright';
-import { Kernel } from '@onkernel/sdk';
 import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
 import axios from 'axios';
 import config from './config.js';
 import llm from './llm.js';
 import { extractColorPalette } from './image-processor.js';
+import browserManager from './browser-manager.js';
 
 // User agent pool for rotation
 const USER_AGENTS = [
@@ -29,19 +28,10 @@ const USER_AGENTS = [
 
 class Crawler {
   constructor() {
-    this.browser = null;
-    this.browserType = null;
     this.userAgentIndex = 0;
     this.llm = llm;
-    this.kernel = null;
-    if (config.onkernel.apiKey) {
-      try {
-        this.kernel = new Kernel({ apiKey: config.onkernel.apiKey });
-        console.log('OnKernel Kernel for browsers initialized.');
-      } catch (error) {
-        console.error('Failed to initialize OnKernel Kernel for browsers:', error);
-      }
-    }
+    this.browserManager = browserManager;
+    this.activeContexts = new Map(); // Track active contexts for cleanup
   }
 
   // Get random user agent
@@ -66,65 +56,48 @@ class Crawler {
     return browserType;
   }
 
-  // Launch appropriate browser
-  async launchBrowser(type) {
-    // If OnKernel is configured and we are asked for a chromium browser, use OnKernel.
-    if (this.kernel && type === 'chromium') {
-      try {
-        console.log('Launching browser via OnKernel...');
-        const kernelBrowser = await this.kernel.browsers.create();
-        const browser = await chromium.connectOverCDP(kernelBrowser.cdp_ws_url);
-        // Store kernelBrowser details for later cleanup
-        browser.kernelBrowser = kernelBrowser;
-        return browser;
-      } catch (error) {
-        console.error('Failed to launch browser with OnKernel, falling back to local Playwright.', error);
-        // Fall through to local launch
-      }
-    }
-
-    // Fallback for other browsers, or if OnKernel is not configured, or if OnKernel fails.
-    if (this.kernel && type !== 'chromium') {
-      console.warn(`OnKernel browser launch is currently only supported for Chromium. Launching ${type} locally.`);
-    } else if (!this.kernel) {
-      console.log('OnKernel not configured. Launching browser locally.');
-    }
-    
-    const browserMap = {
-      chromium: chromium,
-      firefox: firefox,
-      webkit: webkit
-    };
-
-    const browserEngine = browserMap[type] || chromium;
-    
-    return await browserEngine.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-  }
-
+  // Initialize crawler (compatibility method)
   async init() {
-    if (!this.browser) {
-      this.browserType = this.getBrowserType();
-      this.browser = await this.launchBrowser(this.browserType);
-    }
+    // Browser initialization is now handled by BrowserManager on-demand
+    console.log('[Crawler] Using BrowserManager for browser sessions');
   }
 
+  // Close crawler (compatibility method)
   async close() {
-    if (this.browser) {
-      if (this.browser.kernelBrowser && this.kernel) {
-        try {
-          console.log('Destroying OnKernel browser session...');
-          await this.kernel.browsers.destroy(this.browser.kernelBrowser.id);
-        } catch (error) {
-          console.error('Failed to destroy OnKernel browser session:', error);
-        }
-      }
-      await this.browser.close();
-      this.browser = null;
-      this.browserType = null;
+    // Clean up any active contexts created by this crawler instance
+    for (const [contextId] of this.activeContexts) {
+      await this.browserManager.closeContext(contextId);
     }
+    this.activeContexts.clear();
+    console.log('[Crawler] Cleaned up active contexts');
+  }
+
+  // Get a browser context for crawling
+  async getContext(options = {}) {
+    const browserType = this.getBrowserType();
+    const contextOptions = {
+      userAgent: this.getRandomUserAgent(),
+      ...options
+    };
+    
+    const { context, contextId, reused } = await this.browserManager.getContext(browserType, contextOptions);
+    
+    // Track this context
+    this.activeContexts.set(contextId, context);
+    
+    if (reused) {
+      console.log(`[Crawler] Reusing existing context: ${contextId}`);
+    } else {
+      console.log(`[Crawler] Created new context: ${contextId}`);
+    }
+    
+    return { context, contextId };
+  }
+
+  // Get a page from context
+  async getPage(contextId) {
+    const { page, pageId } = await this.browserManager.getPage(contextId);
+    return { page, pageId };
   }
 
   // Sleep utility
